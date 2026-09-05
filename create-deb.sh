@@ -1,0 +1,1070 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Script: create-deb.sh
+# Author: Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>
+#
+# Purpose:
+#   Build installable Debian packages for create-claster.sh from the filesystem
+#   skeleton stored in tmp/rootFs. Temporary build trees are created under tmp,
+#   and completed packages are written to dist unless another output directory
+#   is requested. With no --mode argument, the script opens an interactive mode
+#   selection menu. Modes 2-4 generate an idempotent postinst deployment
+#   procedure; --mode 1 performs a direct scripts-only package build.
+#
+# Package modes accepted by --mode:
+#   1  Install scripts, configuration, documentation, and the command symlink.
+#   2  Install the files and create an empty PostgreSQL cluster.
+#   3  Install the files and restore a cluster from an embedded cold backup.
+#   4  Install the files, create a cluster, and restore an embedded hot DB dump.
+#
+# Command-line options:
+#   -h, --help                 Print detailed usage information.
+#   -v, --version              Print the builder version.
+#   -m, --mode MODE            Select package mode 1, 2, 3, or 4.
+#       --pg-family FAMILY     postgresql, postgrespro-ent, or tantor-free.
+#       --pg-version VERSION   Set the PostgreSQL major version.
+#       --cluster-name NAME    Set the target cluster name.
+#       --port PORT            Set the target cluster TCP port.
+#       --package PACKAGE      Set an exact PostgreSQL server package dependency.
+#       --schema NAME          Set the schema and owner role for a new cluster.
+#       --user NAME            Set the application login role for a new cluster.
+#       --password PASSWORD    Set the password stored in the deployment plan.
+#       --data-root DIRECTORY  Set a custom data root, for example /DATA.
+#       --backup-file FILE     Select a cold (mode 3) or hot (mode 4) backup.
+#       --backup-dir DIRECTORY Select the directory used by backup selection.
+#       --database NAME        Set the target database name for mode 4.
+#       --depends PACKAGES     Add comma-separated package dependencies.
+#       --output-dir DIRECTORY Set the destination directory for the DEB file.
+#   -i, --interactive          Explicitly enable the mode 2-4 configuration dialog.
+#   -n, --non-interactive      Disable prompts and require complete arguments.
+#   -f, --force                Allow replacement of an existing output package.
+#
+# Arguments and interactive defaults:
+#   Positional arguments are not accepted. PostgreSQL, cluster, role, password,
+#   and backup-directory defaults are loaded from .new-claster.config. In modes
+#   3 and 4, the interactive dialog lists backups by number, detects hot/cold
+#   type, reads backup-info.env without executing it, and lets the operator
+#   confirm or change supported target values before the package is created.
+#
+# Output and dependencies:
+#   Every package depends on postgresql-common. Deployment modes also depend on
+#   the selected server package; Postgres Pro packages include the matching
+#   contrib dependency. Run --help for package-name patterns and examples.
+# ==============================================================================
+
+set -Eeuo pipefail
+
+readonly SCRIPT_NAME="create-deb.sh"
+readonly SCRIPT_VERSION="1.2.0"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
+readonly ROOTFS_SKELETON="${SCRIPT_DIR}/tmp/rootFs"
+readonly TMP_DIR="${SCRIPT_DIR}/tmp"
+readonly INSTALL_DIR="/usr/local/share/pg_claster_creator"
+readonly COMMAND_LINK="/usr/local/bin/create-claster.sh"
+
+MODE=""
+OUTPUT_DIR="${SCRIPT_DIR}/dist"
+BACKUP_FILE=""
+BACKUP_DIR=""
+SERVER_PACKAGE=""
+DATA_ROOT=""
+DATABASE_NAME=""
+EXTRA_DEPENDENCIES_INPUT=""
+INTERACTIVE_MODE="yes"
+MOVE_AFTER_RESTORE="no"
+FORCE_BUILD=0
+BUILD_ROOT=""
+META_TEXT=""
+META_BACKUP_TYPE=""
+META_PG_FAMILY=""
+META_PG_VERSION=""
+META_CLUSTER_NAME=""
+META_CLUSTER_PORT=""
+META_PACKAGE=""
+META_DATA_DIR=""
+META_DATABASE_NAME=""
+
+PG_FAMILY_SET=0
+PG_VERSION_SET=0
+CLUSTER_NAME_SET=0
+CLUSTER_PORT_SET=0
+PACKAGE_SET=0
+SCHEMA_SET=0
+USER_SET=0
+PASSWORD_SET=0
+DATA_ROOT_SET=0
+DATABASE_SET=0
+declare -a EXTRA_DEPENDENCIES=()
+
+pg="postgresql"
+pg_ver="16"
+cls_pt="5432"
+cls_nm="subsys"
+cls_ch="subsys"
+cls_us="subsys"
+cls_pw="subsys"
+
+usage() {
+    cat <<EOF
+Использование:
+  ${SCRIPT_NAME} [КЛЮЧИ]
+
+Без --mode открывается интерактивный выбор режима сборки.
+Для прямой сборки пакета со сценариями используется --mode 1.
+
+Режимы:
+  1  Установить сценарии
+  2  Установить сценарии и создать пустой кластер
+  3  Установить сценарии и восстановить кластер из холодного бэкапа
+  4  Установить сценарии, создать кластер и восстановить горячий бэкап БД
+
+Ключи:
+  -h, --help                  Показать эту справку и выйти
+  -v, --version               Показать версию и выйти
+  -m, --mode РЕЖИМ            Явно выбрать режим сборки 1|2|3|4
+      --pg-family СЕМЕЙСТВО   postgresql|postgrespro-ent|tantor-free
+      --pg-version ВЕРСИЯ     Основная версия PostgreSQL
+      --cluster-name ИМЯ      Имя создаваемого/восстанавливаемого кластера
+      --port ПОРТ             TCP-порт кластера
+      --package ПАКЕТ         Точный серверный пакет; по умолчанию вычисляется
+      --schema ИМЯ            Схема и роль-владелец при создании кластера
+      --user ИМЯ              Прикладной пользователь при создании кластера
+      --password ПАРОЛЬ       Пароль создаваемых ролей
+      --data-root КАТАЛОГ     Пользовательский корень данных, например /DATA
+      --backup-file ФАЙЛ      Холодный бэкап для режима 3 или горячий для режима 4
+      --backup-dir КАТАЛОГ    Каталог выбора бэкапов; по умолчанию из конфига
+      --database ИМЯ          Целевая БД для режима 4
+      --depends ПАКЕТЫ        Дополнительные зависимости через запятую;
+                              ключ можно указывать несколько раз (режимы 2–4)
+      --output-dir КАТАЛОГ    Каталог результата; по умолчанию ${SCRIPT_DIR}/dist
+  -i, --interactive           Явно включить диалог режимов 2–4
+  -n, --non-interactive       Отключить диалог и требовать параметры в ключах
+  -f, --force                 Разрешить замену уже существующего файла пакета
+
+Значения по умолчанию для PostgreSQL и кластера читаются из
+${CONFIG_FILE}.
+Без --mode сначала выводится интерактивный список режимов. В режимах 2–4
+диалог включён по умолчанию. Для автоматизации используется --non-interactive.
+В диалоге выбирается бэкап, показываются его метаданные и уточняются
+параметры целевого кластера, БД и размещения данных.
+
+Имена результатов:
+  claster-creator-${SCRIPT_VERSION}.deb
+  claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-empty.deb
+  claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-fill.deb
+  claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-<БД>.deb
+
+Примеры:
+  ./${SCRIPT_NAME}                         # интерактивный выбор режима
+  ./${SCRIPT_NAME} --mode 1                # прямой пакет только со сценариями
+  ./${SCRIPT_NAME} --mode 2 --pg-family postgrespro-ent --pg-version 16 --cluster-name subsys --port 5432
+  ./${SCRIPT_NAME} --mode 2 --non-interactive --cluster-name subsys --depends postgis,pgbouncer
+  ./${SCRIPT_NAME} --mode 3 --interactive
+  ./${SCRIPT_NAME} --mode 3 --pg-family postgrespro-ent --pg-version 16 --cluster-name subsys --port 5432 --backup-file /.postgres/backup/16-subsys-20260905-085245.tar.gz
+  ./${SCRIPT_NAME} --mode 4 --pg-family postgrespro-ent --pg-version 16 --cluster-name subsys --database asvd --backup-file /.postgres/backup/16-asvd-20260905-105802-dmp.tar.gz
+
+Устанавливать результат рекомендуется через apt:
+  apt install ./dist/ИМЯ_ПАКЕТА.deb
+EOF
+}
+
+version() {
+    printf '%s, версия %s\n' "${SCRIPT_NAME}" "${SCRIPT_VERSION}"
+}
+
+die() {
+    printf 'ОШИБКА: %s\n' "$*" >&2
+    exit 1
+}
+
+cleanup() {
+    if [[ -n "${BUILD_ROOT}" && -n "${TMP_DIR}" && "${BUILD_ROOT}" == "${TMP_DIR}/create-deb."* ]]; then
+        rm -rf -- "${BUILD_ROOT}"
+    fi
+}
+
+trap cleanup EXIT
+
+option_value_required() {
+    (($# >= 2)) && [[ -n "$2" ]] || die "для ключа $1 требуется значение"
+}
+
+load_defaults() {
+    [[ -r "${CONFIG_FILE}" ]] || die "не найден конфиг ${CONFIG_FILE}"
+    # shellcheck disable=SC1090
+    source "${CONFIG_FILE}"
+    BACKUP_DIR="${backup_dir:-/.postgres/backup}"
+}
+
+handle_early_options() {
+    (($# == 1)) || return 0
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -v|--version) version; exit 0 ;;
+    esac
+}
+
+parse_args() {
+    while (($#)); do
+        case "$1" in
+            -h|--help) usage; exit 0 ;;
+            -v|--version) version; exit 0 ;;
+            -m|--mode) option_value_required "$@"; MODE="$2"; shift 2 ;;
+            --mode=*) MODE="${1#*=}"; shift ;;
+            --pg-family) option_value_required "$@"; pg="$2"; PG_FAMILY_SET=1; shift 2 ;;
+            --pg-family=*) pg="${1#*=}"; PG_FAMILY_SET=1; shift ;;
+            --pg-version) option_value_required "$@"; pg_ver="$2"; PG_VERSION_SET=1; shift 2 ;;
+            --pg-version=*) pg_ver="${1#*=}"; PG_VERSION_SET=1; shift ;;
+            --cluster-name) option_value_required "$@"; cls_nm="$2"; CLUSTER_NAME_SET=1; shift 2 ;;
+            --cluster-name=*) cls_nm="${1#*=}"; CLUSTER_NAME_SET=1; shift ;;
+            --port) option_value_required "$@"; cls_pt="$2"; CLUSTER_PORT_SET=1; shift 2 ;;
+            --port=*) cls_pt="${1#*=}"; CLUSTER_PORT_SET=1; shift ;;
+            --package) option_value_required "$@"; SERVER_PACKAGE="$2"; PACKAGE_SET=1; shift 2 ;;
+            --package=*) SERVER_PACKAGE="${1#*=}"; PACKAGE_SET=1; shift ;;
+            --schema) option_value_required "$@"; cls_ch="$2"; SCHEMA_SET=1; shift 2 ;;
+            --schema=*) cls_ch="${1#*=}"; SCHEMA_SET=1; shift ;;
+            --user) option_value_required "$@"; cls_us="$2"; USER_SET=1; shift 2 ;;
+            --user=*) cls_us="${1#*=}"; USER_SET=1; shift ;;
+            --password) option_value_required "$@"; cls_pw="$2"; PASSWORD_SET=1; shift 2 ;;
+            --password=*) cls_pw="${1#*=}"; PASSWORD_SET=1; shift ;;
+            --data-root) option_value_required "$@"; DATA_ROOT="$2"; DATA_ROOT_SET=1; shift 2 ;;
+            --data-root=*) DATA_ROOT="${1#*=}"; DATA_ROOT_SET=1; shift ;;
+            --backup-file) option_value_required "$@"; BACKUP_FILE="$2"; shift 2 ;;
+            --backup-file=*) BACKUP_FILE="${1#*=}"; shift ;;
+            --backup-dir) option_value_required "$@"; BACKUP_DIR="$2"; shift 2 ;;
+            --backup-dir=*) BACKUP_DIR="${1#*=}"; shift ;;
+            --database) option_value_required "$@"; DATABASE_NAME="$2"; DATABASE_SET=1; shift 2 ;;
+            --database=*) DATABASE_NAME="${1#*=}"; DATABASE_SET=1; shift ;;
+            --depends)
+                option_value_required "$@"
+                EXTRA_DEPENDENCIES_INPUT+="${EXTRA_DEPENDENCIES_INPUT:+,}$2"
+                shift 2
+                ;;
+            --depends=*)
+                EXTRA_DEPENDENCIES_INPUT+="${EXTRA_DEPENDENCIES_INPUT:+,}${1#*=}"
+                shift
+                ;;
+            --output-dir) option_value_required "$@"; OUTPUT_DIR="$2"; shift 2 ;;
+            --output-dir=*) OUTPUT_DIR="${1#*=}"; shift ;;
+            -i|--interactive) INTERACTIVE_MODE=yes; shift ;;
+            -n|--non-interactive) INTERACTIVE_MODE=no; shift ;;
+            -f|--force) FORCE_BUILD=1; shift ;;
+            --) shift; (($# == 0)) || die "позиционные аргументы не поддерживаются" ;;
+            -*) die "неизвестный ключ: $1 (используйте --help)" ;;
+            *) die "неожиданный аргумент: $1 (используйте --help)" ;;
+        esac
+    done
+}
+
+validate_identifier() {
+    [[ "$1" =~ ^[a-z][a-z0-9_]*$ ]]
+}
+
+validate_database_name() {
+    [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
+}
+
+warn() {
+    printf 'ПРЕДУПРЕЖДЕНИЕ: %s\n' "$*" >&2
+}
+
+prompt_value() {
+    local label="$1" current="$2" value
+    read -r -p "${label} [${current}]: " value || return 1
+    printf '%s' "${value:-${current}}"
+}
+
+confirm() {
+    local prompt="$1" answer
+    read -r -p "${prompt} [Y/n]: " answer || return 1
+    case "${answer,,}" in
+        ''|y|yes|д|да) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+backup_kind() {
+    case "${1##*/}" in
+        *-dmp.tar.gz) printf 'hot' ;;
+        *.tar.gz) printf 'cold' ;;
+        *) return 1 ;;
+    esac
+}
+
+backup_kind_label() {
+    case "$1" in
+        hot) printf 'горячий' ;;
+        cold) printf 'холодный' ;;
+    esac
+}
+
+backup_filename_supported() {
+    [[ "${1##*/}" =~ ^[0-9]+-[A-Za-z0-9_][A-Za-z0-9_.-]*-[0-9]{8}-[0-9]{6}(-dmp)?\.tar\.gz$ ]]
+}
+
+resolve_backup_file() {
+    local requested="$1" candidate
+    if [[ "${requested}" == /* ]]; then
+        candidate="${requested}"
+    elif [[ -f "${requested}" ]]; then
+        candidate="${requested}"
+    else
+        candidate="${BACKUP_DIR%/}/${requested}"
+    fi
+    realpath -e -- "${candidate}" 2>/dev/null
+}
+
+select_backup_interactive() {
+    local required_kind="$1" selected kind choice i
+    local -a backups=()
+    if [[ -n "${BACKUP_FILE}" ]]; then
+        BACKUP_FILE="$(resolve_backup_file "${BACKUP_FILE}")" || {
+            warn "бэкап не найден: ${BACKUP_FILE}"
+            return 1
+        }
+        backup_filename_supported "${BACKUP_FILE}" || {
+            warn "неподдерживаемое имя бэкапа: ${BACKUP_FILE##*/}"
+            return 1
+        }
+        kind="$(backup_kind "${BACKUP_FILE}")"
+        [[ "${kind}" == "${required_kind}" ]] || {
+            warn "для режима ${MODE} требуется $(backup_kind_label "${required_kind}") бэкап"
+            return 1
+        }
+        return 0
+    fi
+
+    [[ -d "${BACKUP_DIR}" ]] || {
+        warn "каталог бэкапов не найден: ${BACKUP_DIR}"
+        return 1
+    }
+    while IFS= read -r selected; do
+        backup_filename_supported "${selected}" && backups+=("${selected}")
+    done < <(find -H "${BACKUP_DIR}" -maxdepth 1 -type f -name '*.tar.gz' -print 2>/dev/null | sort -r)
+    ((${#backups[@]})) || {
+        warn "в ${BACKUP_DIR} нет поддерживаемых бэкапов"
+        return 1
+    }
+
+    while true; do
+        printf '\nДоступные резервные копии:\n'
+        for i in "${!backups[@]}"; do
+            kind="$(backup_kind "${backups[i]}")"
+            printf '%3d - [%-9s] %s\n' "$((i + 1))" "$(backup_kind_label "${kind}")" "${backups[i]##*/}"
+        done
+        printf '  0 - Отменить сборку\n'
+        read -r -p "Выберите резервную копию: " choice || return 1
+        [[ "${choice}" =~ ^[0-9]+$ ]] || { warn "введите номер из списка"; continue; }
+        ((choice == 0)) && return 1
+        ((choice >= 1 && choice <= ${#backups[@]})) || { warn "неверный номер"; continue; }
+        selected="${backups[choice-1]}"
+        kind="$(backup_kind "${selected}")"
+        if [[ "${kind}" != "${required_kind}" ]]; then
+            warn "режим ${MODE} принимает только $(backup_kind_label "${required_kind}") бэкап"
+            continue
+        fi
+        BACKUP_FILE="$(realpath -e -- "${selected}")"
+        return 0
+    done
+}
+
+decode_metadata_value() {
+    local value="$1"
+    if [[ "${value}" == "''" ]]; then
+        printf ''
+    else
+        printf '%s' "${value}" | sed -E 's/\\(.)/\1/g'
+    fi
+}
+
+metadata_value() {
+    local key="$1" line
+    while IFS= read -r line; do
+        if [[ "${line%%=*}" == "${key}" ]]; then
+            decode_metadata_value "${line#*=}"
+            return 0
+        fi
+    done <<<"${META_TEXT}"
+    return 1
+}
+
+read_backup_metadata() {
+    local kind="$1" metadata_path value
+    if [[ "${kind}" == cold ]]; then metadata_path='root/backup-info.env'; else metadata_path='backup-info.env'; fi
+    META_TEXT="$(tar -xOzf "${BACKUP_FILE}" "${metadata_path}" 2>/dev/null)" || \
+        die "в бэкапе отсутствует метафайл ${metadata_path}"
+    [[ -n "${META_TEXT}" ]] || die "метафайл бэкапа пуст"
+    META_BACKUP_TYPE="$(metadata_value backup_type || true)"
+    META_PG_FAMILY="$(metadata_value pg_family || true)"
+    META_PG_VERSION="$(metadata_value pg_version || true)"
+    META_CLUSTER_NAME="$(metadata_value cluster_name || true)"
+    META_CLUSTER_PORT="$(metadata_value cluster_port || true)"
+    META_PACKAGE="$(metadata_value package || true)"
+    META_DATA_DIR="$(metadata_value data_dir || true)"
+    META_DATABASE_NAME="$(metadata_value database_name || true)"
+    [[ "${META_BACKUP_TYPE}" == "${kind}" ]] || die \
+        "тип в метафайле (${META_BACKUP_TYPE:-не указан}) не совпадает с типом архива (${kind})"
+    [[ "${META_PG_VERSION}" =~ ^[0-9]+$ ]] || die "в метафайле отсутствует корректная версия PostgreSQL"
+    validate_identifier "${META_CLUSTER_NAME}" || die "в метафайле некорректное имя кластера"
+    [[ "${META_CLUSTER_PORT}" =~ ^[0-9]+$ ]] || die "в метафайле некорректный порт кластера"
+    if [[ "${kind}" == cold ]]; then
+        [[ "${META_DATA_DIR}" == /*/"${META_CLUSTER_NAME}" ]] || die "в метафайле некорректный каталог данных"
+        validate_package_name "${META_PACKAGE}" || die "в метафайле некорректный серверный пакет"
+    else
+        validate_database_name "${META_DATABASE_NAME}" || die "в метафайле некорректное имя БД"
+    fi
+    value="${BACKUP_FILE##*/}"
+    [[ "${value}" == "${META_PG_VERSION}-"* ]] || die "версия в имени архива не совпадает с метафайлом"
+}
+
+print_backup_metadata() {
+    local kind="$1" count i name size
+    printf '\nМетаданные выбранного бэкапа:\n'
+    printf '  Тип:                 %s\n' "$(backup_kind_label "${kind}")"
+    printf '  Файл:                %s\n' "${BACKUP_FILE}"
+    printf '  Хост-источник:       %s\n' "$(metadata_value host_name || printf 'не указан')"
+    printf '  Дата создания:       %s\n' "$(metadata_value created_at || printf 'не указана')"
+    printf '  PostgreSQL:           %s\n' "$(metadata_value postgres_version_text || printf '%s' "${META_PG_VERSION}")"
+    printf '  Семейство:           %s\n' "${META_PG_FAMILY:-не указано}"
+    printf '  Кластер-источник:    %s\n' "${META_CLUSTER_NAME}"
+    printf '  Порт источника:      %s\n' "${META_CLUSTER_PORT}"
+    [[ -n "${META_PACKAGE}" ]] && printf '  Серверный пакет:     %s\n' "${META_PACKAGE}"
+    [[ -n "${META_DATA_DIR}" ]] && printf '  Каталог данных:      %s\n' "${META_DATA_DIR}"
+    size="$(metadata_value data_directory_du_sh || metadata_value data_directory_size_pretty || true)"
+    [[ -n "${size}" ]] && printf '  Размер data:         %s\n' "${size}"
+    [[ -n "${META_DATABASE_NAME}" ]] && printf '  База данных:         %s\n' "${META_DATABASE_NAME}"
+    count="$(metadata_value database_count || printf '0')"
+    if [[ "${count}" =~ ^[0-9]+$ ]] && ((count > 0)); then
+        printf '  Базы данных:\n'
+        for ((i = 1; i <= count; i++)); do
+            name="$(metadata_value "database_${i}_name" || true)"
+            size="$(metadata_value "database_${i}_size_pretty" || true)"
+            printf '    %-24s %s\n' "${name}" "${size}"
+        done
+    fi
+}
+
+infer_family_from_package() {
+    case "$1" in
+        postgrespro-ent-*) printf 'postgrespro-ent' ;;
+        tantor-free-*) printf 'tantor-free' ;;
+        postgresql-*) printf 'postgresql' ;;
+        *) return 1 ;;
+    esac
+}
+
+prompt_family() {
+    local choice default_choice=1
+    case "${pg}" in postgresql) default_choice=1 ;; postgrespro-ent) default_choice=2 ;; tantor-free) default_choice=3 ;; esac
+    while true; do
+        printf '\nСемейство PostgreSQL:\n1 - postgresql\n2 - postgrespro-ent\n3 - tantor-free\n'
+        read -r -p "Выбор [${default_choice}]: " choice || return 1
+        choice="${choice:-${default_choice}}"
+        case "${choice}" in
+            1) pg=postgresql; return 0 ;;
+            2) pg=postgrespro-ent; return 0 ;;
+            3) pg=tantor-free; return 0 ;;
+            *) warn "выберите 1, 2 или 3" ;;
+        esac
+    done
+}
+
+prompt_validated_value() {
+    local target="$1" label="$2" current="$3" validator="$4" message="$5" value
+    while true; do
+        value="$(prompt_value "${label}" "${current}")" || return 1
+        if "${validator}" "${value}"; then
+            printf -v "${target}" '%s' "${value}"
+            return 0
+        fi
+        warn "${message}"
+    done
+}
+
+validate_version() { [[ "$1" =~ ^[0-9]+$ ]]; }
+validate_port() { [[ "$1" =~ ^[0-9]+$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535)); }
+validate_package_name() { [[ "$1" =~ ^[a-z0-9][a-z0-9+.-]*$ ]]; }
+
+trim_whitespace() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "${value}"
+}
+
+normalize_extra_dependencies() {
+    local specification dependency existing
+    local -a requested=()
+    EXTRA_DEPENDENCIES=()
+    [[ -n "${EXTRA_DEPENDENCIES_INPUT}" ]] || return 0
+    IFS=',' read -r -a requested <<<"${EXTRA_DEPENDENCIES_INPUT}"
+    for specification in "${requested[@]}"; do
+        dependency="$(trim_whitespace "${specification}")"
+        validate_package_name "${dependency}" || return 1
+        for existing in "${EXTRA_DEPENDENCIES[@]}"; do
+            [[ "${existing}" == "${dependency}" ]] && continue 2
+        done
+        EXTRA_DEPENDENCIES+=("${dependency}")
+    done
+    ((${#EXTRA_DEPENDENCIES[@]} > 0))
+}
+
+prompt_extra_dependencies() {
+    local value
+    while true; do
+        value="$(prompt_value 'Дополнительные зависимости через запятую' "${EXTRA_DEPENDENCIES_INPUT:-нет}")" || return 1
+        case "${value,,}" in
+            нет|none|-) EXTRA_DEPENDENCIES_INPUT="" ;;
+            *) EXTRA_DEPENDENCIES_INPUT="${value}" ;;
+        esac
+        if normalize_extra_dependencies; then
+            return 0
+        fi
+        warn "используйте имена DEB-пакетов через запятую без условий версий"
+    done
+}
+
+default_target_data_path() {
+    if [[ "${pg}" == tantor-free ]]; then
+        printf '/var/lib/postgresql/tantor-free-%s/%s' "${pg_ver}" "${cls_nm}"
+    else
+        printf '/var/lib/postgresql/%s/%s' "${pg_ver}" "${cls_nm}"
+    fi
+}
+
+custom_target_data_path() {
+    local root="${1%/}"
+    [[ -n "${root}" ]] || root=/
+    if [[ "${root}" == / ]]; then
+        printf '/pg_%s/%s' "${pg_ver}" "${cls_nm}"
+    else
+        printf '%s/pg_%s/%s' "${root}" "${pg_ver}" "${cls_nm}"
+    fi
+}
+
+prompt_data_location() {
+    local choice root default_choice=1 source_path requested_path
+    if [[ "${MODE}" == 3 ]]; then
+        source_path="${META_DATA_DIR%/${META_CLUSTER_NAME}}/${cls_nm}"
+        ((DATA_ROOT_SET)) && default_choice=3
+        while true; do
+            printf '\nРазмещение восстановленного каталога данных:\n'
+            printf '1 - Исходное размещение: %s\n' "${META_DATA_DIR%/${META_CLUSTER_NAME}}/${cls_nm}"
+            printf '2 - Дефолтное размещение выбранного сервера\n'
+            printf '3 - Указать другой корневой каталог\n'
+            read -r -p "Выбор [${default_choice}]: " choice || return 1
+            choice="${choice:-${default_choice}}"
+            case "${choice}" in
+                1) MOVE_AFTER_RESTORE=no; DATA_ROOT=""; return 0 ;;
+                2)
+                    DATA_ROOT=""
+                    if [[ "${source_path}" == "$(default_target_data_path)" ]]; then
+                        MOVE_AFTER_RESTORE=no
+                        printf 'Исходный путь уже является дефолтным; дополнительное перемещение не требуется.\n'
+                    else
+                        MOVE_AFTER_RESTORE=yes
+                    fi
+                    return 0
+                    ;;
+                3)
+                    root="$(prompt_value 'Корневой каталог' "${DATA_ROOT:-/DATA}")" || return 1
+                    [[ "${root}" == /* && "${root}" != *[[:space:]]* ]] || { warn "нужен абсолютный путь без пробелов"; continue; }
+                    requested_path="$(custom_target_data_path "${root}")"
+                    if [[ "${source_path}" == "${requested_path}" ]]; then
+                        MOVE_AFTER_RESTORE=no
+                        DATA_ROOT=""
+                        printf 'Исходный путь уже совпадает с выбранным; дополнительное перемещение не требуется.\n'
+                    else
+                        MOVE_AFTER_RESTORE=yes
+                        DATA_ROOT="${root}"
+                    fi
+                    return 0
+                    ;;
+                *) warn "выберите 1, 2 или 3" ;;
+            esac
+        done
+    fi
+    [[ -n "${DATA_ROOT}" ]] && default_choice=2
+    while true; do
+        printf '\nРазмещение создаваемого каталога данных:\n'
+        printf '1 - Дефолтное размещение выбранного сервера\n'
+        printf '2 - Указать другой корневой каталог\n'
+        read -r -p "Выбор [${default_choice}]: " choice || return 1
+        choice="${choice:-${default_choice}}"
+        case "${choice}" in
+            1) DATA_ROOT=""; return 0 ;;
+            2)
+                root="$(prompt_value 'Корневой каталог' "${DATA_ROOT:-/DATA}")" || return 1
+                [[ "${root}" == /* && "${root}" != *[[:space:]]* ]] || { warn "нужен абсолютный путь без пробелов"; continue; }
+                DATA_ROOT="${root}"; return 0
+                ;;
+            *) warn "выберите 1 или 2" ;;
+        esac
+    done
+}
+
+target_data_path() {
+    if [[ "${MODE}" == 3 && "${MOVE_AFTER_RESTORE}" == no ]]; then
+        printf '%s/%s' "${META_DATA_DIR%/${META_CLUSTER_NAME}}" "${cls_nm}"
+    elif [[ -n "${DATA_ROOT}" ]]; then
+        custom_target_data_path "${DATA_ROOT}"
+    else
+        default_target_data_path
+    fi
+}
+
+select_mode_interactive() {
+    local choice
+    while true; do
+        printf '%s, версия %s\n' "${SCRIPT_NAME}" "${SCRIPT_VERSION}"
+        printf '%s\n' '-------------------------------------------------------------------------------'
+        printf 'Выбор режима сборки DEB-пакета\n'
+        printf '%s\n' '-------------------------------------------------------------------------------'
+        printf '%s\n' \
+            '0 - Выход' \
+            '1 - Установить сценарии' \
+            '2 - Установить сценарии и создать пустой кластер' \
+            '3 - Установить сценарии и восстановить холодный бэкап' \
+            '4 - Установить сценарии, создать кластер и восстановить горячий бэкап БД'
+        read -r -p 'Выберите режим: ' choice || return 1
+        case "${choice}" in
+            0) return 1 ;;
+            1|2|3|4) MODE="${choice}"; return 0 ;;
+            *) warn "выберите номер от 0 до 4" ;;
+        esac
+    done
+}
+
+interactive_configuration() {
+    local kind required_kind old_name password_value package_default selected_from_menu=no
+    if [[ -z "${MODE}" ]]; then
+        select_mode_interactive || return 1
+        selected_from_menu=yes
+    fi
+    if [[ "${selected_from_menu}" == no ]]; then
+        printf '%s, версия %s\n' "${SCRIPT_NAME}" "${SCRIPT_VERSION}"
+        printf '%s\n' '-------------------------------------------------------------------------------'
+    fi
+    printf 'Интерактивная сборка, режим %s\n' "${MODE}"
+    printf '%s\n' '-------------------------------------------------------------------------------'
+
+    if [[ "${MODE}" == 1 ]]; then
+        printf '\nБудет создан пакет со сценариями, конфигурацией и документацией.\n'
+        printf 'Результат: %s/%s.deb\n' "${OUTPUT_DIR}" "$(package_basename)"
+        confirm 'Собрать пакет режима 1?'
+        return
+    fi
+
+    if [[ "${MODE}" == 3 || "${MODE}" == 4 ]]; then
+        if [[ "${MODE}" == 3 ]]; then required_kind=cold; else required_kind=hot; fi
+        select_backup_interactive "${required_kind}" || return 1
+        kind="$(backup_kind "${BACKUP_FILE}")"
+        read_backup_metadata "${kind}"
+        print_backup_metadata "${kind}"
+        if [[ "${MODE}" == 3 ]]; then
+            pg_ver="${META_PG_VERSION}"
+            pg="${META_PG_FAMILY:-$(infer_family_from_package "${META_PACKAGE}" || true)}"
+            SERVER_PACKAGE="${META_PACKAGE}"
+            [[ -n "${pg}" && -n "${SERVER_PACKAGE}" ]] || die "в холодном метафайле недостаточно данных о серверном пакете"
+        else
+            ((PG_VERSION_SET)) || pg_ver="${META_PG_VERSION}"
+            ((PG_FAMILY_SET)) || pg="${META_PG_FAMILY:-${pg}}"
+        fi
+        ((CLUSTER_NAME_SET)) || cls_nm="${META_CLUSTER_NAME}"
+        ((CLUSTER_PORT_SET)) || cls_pt="${META_CLUSTER_PORT}"
+        if [[ "${MODE}" == 4 ]] && ((DATABASE_SET == 0)); then
+            DATABASE_NAME="${META_DATABASE_NAME}"
+        fi
+    fi
+
+    if [[ "${MODE}" != 3 ]]; then
+        prompt_family || return 1
+        prompt_validated_value pg_ver 'Версия PostgreSQL' "${pg_ver}" validate_version 'версия должна быть целым числом' || return 1
+        if [[ "${MODE}" == 4 && "${pg_ver}" != "${META_PG_VERSION}" ]]; then
+            warn "горячий бэкап PostgreSQL ${META_PG_VERSION} нельзя развернуть в версию ${pg_ver}"
+            return 1
+        fi
+        package_default="$(default_server_package)"
+        [[ -n "${SERVER_PACKAGE}" && "${PACKAGE_SET}" == 1 ]] || SERVER_PACKAGE="${package_default}"
+        prompt_validated_value SERVER_PACKAGE 'Серверный пакет' "${SERVER_PACKAGE}" validate_package_name 'недопустимое имя пакета' || return 1
+    else
+        printf '\nВерсия и серверный пакет холодного бэкапа сохраняются без изменения:\n'
+        printf '  %s, %s, %s\n' "${pg}" "${pg_ver}" "${SERVER_PACKAGE}"
+    fi
+    prompt_extra_dependencies || return 1
+
+    old_name="${cls_nm}"
+    prompt_validated_value cls_nm 'Имя целевого кластера' "${cls_nm}" validate_identifier 'используйте строчные латинские буквы, цифры и подчёркивание' || return 1
+    prompt_validated_value cls_pt 'TCP-порт кластера' "${cls_pt}" validate_port 'порт должен быть числом от 1 до 65535' || return 1
+    if [[ "${MODE}" == 2 || "${MODE}" == 4 ]]; then
+        if [[ "${cls_nm}" != "${old_name}" ]]; then
+            ((SCHEMA_SET)) || cls_ch="${cls_nm}"
+            ((USER_SET)) || cls_us="${cls_nm}"
+            ((PASSWORD_SET)) || cls_pw="${cls_nm}"
+        fi
+        prompt_validated_value cls_ch 'Схема/роль-владелец' "${cls_ch}" validate_identifier 'недопустимое имя схемы' || return 1
+        prompt_validated_value cls_us 'Прикладной пользователь' "${cls_us}" validate_identifier 'недопустимое имя пользователя' || return 1
+        read -r -s -p 'Пароль ролей [Enter — оставить текущее значение]: ' password_value || return 1
+        printf '\n'
+        [[ -z "${password_value}" ]] || cls_pw="${password_value}"
+        [[ -n "${cls_pw}" ]] || { warn "пароль не может быть пустым"; return 1; }
+    fi
+    if [[ "${MODE}" == 4 ]]; then
+        prompt_validated_value DATABASE_NAME 'Имя целевой БД' "${DATABASE_NAME}" validate_database_name 'недопустимое имя базы данных' || return 1
+    fi
+    prompt_data_location || return 1
+
+    printf '\nПараметры создаваемого DEB-пакета:\n'
+    printf '  Режим:               %s\n' "${MODE}"
+    printf '  Семейство:           %s\n' "${pg}"
+    printf '  Версия PostgreSQL:   %s\n' "${pg_ver}"
+    printf '  Серверный пакет:     %s\n' "${SERVER_PACKAGE}"
+    printf '  Доп. зависимости:   %s\n' "${EXTRA_DEPENDENCIES[*]:-нет}"
+    printf '  Целевой кластер:     %s\n' "${cls_nm}"
+    printf '  TCP-порт:            %s\n' "${cls_pt}"
+    printf '  Каталог данных:      %s\n' "$(target_data_path)"
+    [[ -n "${BACKUP_FILE}" ]] && printf '  Бэкап:               %s\n' "${BACKUP_FILE}"
+    [[ "${MODE}" == 4 ]] && printf '  Целевая БД:          %s\n' "${DATABASE_NAME}"
+    printf '  Результат:           %s/%s.deb\n' "${OUTPUT_DIR}" "$(package_basename)"
+    confirm 'Собрать пакет с этими параметрами?'
+}
+
+interactive_requested() {
+    [[ "${MODE}" != 1 ]] || return 1
+    case "${INTERACTIVE_MODE}" in
+        yes) return 0 ;;
+        no) return 1 ;;
+        auto) [[ -t 0 && -t 1 ]] ;;
+    esac
+}
+
+default_server_package() {
+    case "${pg}" in
+        postgresql) printf 'postgresql-%s-server' "${pg_ver}" ;;
+        postgrespro-ent) printf 'postgrespro-ent-%s-server' "${pg_ver}" ;;
+        tantor-free) printf 'tantor-free-server-%s-server' "${pg_ver}" ;;
+    esac
+}
+
+validate_options() {
+    [[ "${MODE}" =~ ^[1-4]$ ]] || die "режим должен быть числом 1, 2, 3 или 4"
+    if [[ "${MODE}" == 1 && -n "${EXTRA_DEPENDENCIES_INPUT}" ]]; then
+        die "--depends поддерживается только в режимах 2, 3 и 4"
+    fi
+    normalize_extra_dependencies || die \
+        "--depends принимает имена DEB-пакетов через запятую без условий версий"
+    [[ -d "${ROOTFS_SKELETON}" ]] || die "не найден скелет файловой системы ${ROOTFS_SKELETON}"
+    [[ -d "${TMP_DIR}" ]] || die "не найден служебный каталог ${TMP_DIR}"
+    command -v dpkg-deb >/dev/null 2>&1 || die "не найдена команда dpkg-deb"
+    command -v tar >/dev/null 2>&1 || die "не найдена команда tar"
+    if [[ "${MODE}" == 3 && -n "${DATA_ROOT}" ]]; then
+        MOVE_AFTER_RESTORE=yes
+    fi
+
+    if [[ "${MODE}" != 1 ]]; then
+        case "${pg}" in
+            postgresql|postgrespro-ent|tantor-free) ;;
+            *) die "неподдерживаемое семейство PostgreSQL: ${pg}" ;;
+        esac
+        [[ "${pg_ver}" =~ ^[0-9]+$ ]] || die "версия PostgreSQL должна быть целым числом"
+        validate_identifier "${cls_nm}" || die "недопустимое имя кластера: ${cls_nm}"
+        validate_identifier "${cls_ch}" || die "недопустимое имя схемы: ${cls_ch}"
+        validate_identifier "${cls_us}" || die "недопустимое имя пользователя: ${cls_us}"
+        [[ -n "${cls_pw}" ]] || die "пароль не может быть пустым"
+        [[ "${cls_pt}" =~ ^[0-9]+$ ]] && ((cls_pt >= 1 && cls_pt <= 65535)) || \
+            die "порт должен быть числом от 1 до 65535"
+        [[ -z "${DATA_ROOT}" || ("${DATA_ROOT}" == /* && "${DATA_ROOT}" != *[[:space:]]*) ]] || \
+            die "--data-root должен быть абсолютным путём без пробельных символов"
+        if [[ -z "${SERVER_PACKAGE}" ]]; then
+            SERVER_PACKAGE="$(default_server_package)"
+        fi
+        [[ "${SERVER_PACKAGE}" =~ ^[a-z0-9][a-z0-9+.-]*$ ]] || \
+            die "недопустимое имя серверного пакета: ${SERVER_PACKAGE}"
+    fi
+
+    case "${MODE}" in
+        1|2)
+            [[ -z "${BACKUP_FILE}" ]] || die "--backup-file применяется только в режимах 3 и 4"
+            ;;
+        3)
+            [[ -n "${BACKUP_FILE}" ]] || die "для режима 3 требуется --backup-file с холодным бэкапом"
+            ;;
+        4)
+            [[ -n "${BACKUP_FILE}" ]] || die "для режима 4 требуется --backup-file с горячим бэкапом"
+            [[ -n "${DATABASE_NAME}" ]] || die "для режима 4 требуется --database"
+            validate_database_name "${DATABASE_NAME}" || die "недопустимое имя базы данных: ${DATABASE_NAME}"
+            ;;
+    esac
+
+    if [[ "${MODE}" == 3 || "${MODE}" == 4 ]]; then
+        BACKUP_FILE="$(realpath -e -- "${BACKUP_FILE}" 2>/dev/null)" || die "не найден файл бэкапа"
+        [[ -f "${BACKUP_FILE}" && ! -L "${BACKUP_FILE}" ]] || die "бэкап должен быть обычным файлом"
+        tar -tzf "${BACKUP_FILE}" >/dev/null || die "не удалось прочитать архив ${BACKUP_FILE}"
+        if [[ "${MODE}" == 3 ]]; then
+            [[ "${BACKUP_FILE##*/}" =~ ^${pg_ver}-[A-Za-z0-9_][A-Za-z0-9_.-]*-[0-9]{8}-[0-9]{6}\.tar\.gz$ ]] || \
+                die "для режима 3 требуется холодный бэкап PostgreSQL ${pg_ver}"
+        else
+            [[ "${BACKUP_FILE##*/}" =~ ^${pg_ver}-[A-Za-z0-9_][A-Za-z0-9_.-]*-[0-9]{8}-[0-9]{6}-dmp\.tar\.gz$ ]] || \
+                die "для режима 4 требуется горячий бэкап PostgreSQL ${pg_ver}"
+        fi
+    fi
+}
+
+package_basename() {
+    case "${MODE}" in
+        1) printf 'claster-creator-%s' "${SCRIPT_VERSION}" ;;
+        2) printf 'claster-creator-%s-%s-%s-%s-empty' \
+            "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${cls_nm}" ;;
+        3) printf 'claster-creator-%s-%s-%s-%s-fill' \
+            "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${cls_nm}" ;;
+        4) printf 'claster-creator-%s-%s-%s-%s-%s' \
+            "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${cls_nm}" "${DATABASE_NAME}" ;;
+    esac
+}
+
+dependency_list() {
+    local dependencies="postgresql-common" dependency
+    if [[ "${MODE}" != 1 ]]; then
+        dependencies+=", ${SERVER_PACKAGE}"
+        if [[ "${SERVER_PACKAGE}" =~ ^postgrespro-ent-([0-9]+)-server$ ]]; then
+            dependencies+=", postgrespro-ent-${BASH_REMATCH[1]}-contrib"
+        fi
+    fi
+    for dependency in "${EXTRA_DEPENDENCIES[@]}"; do
+        dependencies+=", ${dependency}"
+    done
+    printf '%s' "${dependencies}"
+}
+
+write_plan_value() {
+    local name="$1" value="$2"
+    printf '%s=%q\n' "${name}" "${value}"
+}
+
+create_install_plan() {
+    local package_base="$1" payload_dir="$2" backup_name=""
+    local plan_file="${payload_dir}/.package-install.env"
+    if [[ -n "${BACKUP_FILE}" ]]; then
+        backup_name="${BACKUP_FILE##*/}"
+        mkdir -p -- "${payload_dir}/package-data"
+        install -m 0600 -- "${BACKUP_FILE}" "${payload_dir}/package-data/${backup_name}"
+    fi
+    {
+        write_plan_value mode "${MODE}"
+        write_plan_value plan_id "${package_base}"
+        write_plan_value pg_family "${pg}"
+        write_plan_value pg_version "${pg_ver}"
+        write_plan_value cluster_name "${cls_nm}"
+        write_plan_value cluster_port "${cls_pt}"
+        write_plan_value schema_name "${cls_ch}"
+        write_plan_value db_user "${cls_us}"
+        write_plan_value db_password "${cls_pw}"
+        write_plan_value data_root "${DATA_ROOT}"
+        write_plan_value server_package "${SERVER_PACKAGE}"
+        write_plan_value database_name "${DATABASE_NAME}"
+        write_plan_value backup_name "${backup_name}"
+        write_plan_value move_after_restore "${MOVE_AFTER_RESTORE}"
+    } >"${plan_file}"
+    chmod 0600 "${plan_file}"
+}
+
+create_postinst() {
+    local postinst="$1"
+    cat >"${postinst}" <<'EOF'
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+readonly creator_dir="/usr/local/share/pg_claster_creator"
+readonly creator="${creator_dir}/create-claster.sh"
+readonly plan_file="${creator_dir}/.package-install.env"
+
+[[ "${1:-configure}" == configure ]] || exit 0
+[[ -x "${creator}" ]] || { printf 'Не найден %s\n' "${creator}" >&2; exit 1; }
+[[ -r "${plan_file}" ]] || { printf 'Не найден %s\n' "${plan_file}" >&2; exit 1; }
+
+# shellcheck disable=SC1090
+source "${plan_file}"
+readonly state_dir="/var/lib/claster-creator"
+readonly done_marker="${state_dir}/${plan_id}.done"
+readonly cluster_marker="${state_dir}/${plan_id}.cluster-created"
+readonly data_moved_marker="${state_dir}/${plan_id}.data-moved"
+readonly packaged_backup="${creator_dir}/package-data/${backup_name}"
+mkdir -p -- "${state_dir}"
+[[ -e "${done_marker}" ]] && exit 0
+
+install_cluster() {
+    PGCC_ACTION=install \
+    PGCC_PACKAGE="${server_package}" \
+    PGCC_PG_FAMILY="${pg_family}" \
+    PGCC_PG_VERSION="${pg_version}" \
+    PGCC_CLUSTER_NAME="${cluster_name}" \
+    PGCC_CLUSTER_PORT="${cluster_port}" \
+    PGCC_SCHEMA="${schema_name}" \
+    PGCC_DB_USER="${db_user}" \
+    PGCC_DB_PASSWORD="${db_password}" \
+    PGCC_DATA_ROOT="${data_root}" \
+        "${creator}"
+    touch -- "${cluster_marker}"
+}
+
+restore_cold_backup() {
+    PGCC_ACTION=restore \
+    PGCC_BACKUP_FILE="${packaged_backup}" \
+    PGCC_CLUSTER_NAME="${cluster_name}" \
+    PGCC_CLUSTER_PORT="${cluster_port}" \
+        "${creator}"
+}
+
+restore_hot_backup() {
+    PGCC_ACTION=restore \
+    PGCC_BACKUP_FILE="${packaged_backup}" \
+    PGCC_PG_VERSION="${pg_version}" \
+    PGCC_CLUSTER_NAME="${cluster_name}" \
+    PGCC_DATABASE="${database_name}" \
+    PGCC_OVERWRITE=yes \
+        "${creator}"
+}
+
+move_cluster_data() {
+    if [[ -n "${data_root}" ]]; then
+        PGCC_ACTION=move-data \
+        PGCC_PACKAGE="${server_package}" \
+        PGCC_PG_FAMILY="${pg_family}" \
+        PGCC_PG_VERSION="${pg_version}" \
+        PGCC_CLUSTER_NAME="${cluster_name}" \
+        PGCC_DATA_ROOT="${data_root}" \
+            "${creator}"
+    else
+        env -u PGCC_DATA_ROOT \
+            PGCC_ACTION=move-data \
+            PGCC_PACKAGE="${server_package}" \
+            PGCC_PG_FAMILY="${pg_family}" \
+            PGCC_PG_VERSION="${pg_version}" \
+            PGCC_CLUSTER_NAME="${cluster_name}" \
+            "${creator}"
+    fi
+    touch -- "${data_moved_marker}"
+}
+
+case "${mode}" in
+    2)
+        install_cluster
+        ;;
+    3)
+        [[ -f "${packaged_backup}" ]] || { printf 'Не найден встроенный холодный бэкап %s\n' "${packaged_backup}" >&2; exit 1; }
+        if [[ ! -e "${cluster_marker}" ]]; then
+            restore_cold_backup
+            touch -- "${cluster_marker}"
+        fi
+        if [[ "${move_after_restore}" == yes && ! -e "${data_moved_marker}" ]]; then
+            move_cluster_data
+        fi
+        ;;
+    4)
+        [[ -f "${packaged_backup}" ]] || { printf 'Не найден встроенный горячий бэкап %s\n' "${packaged_backup}" >&2; exit 1; }
+        [[ -e "${cluster_marker}" ]] || install_cluster
+        restore_hot_backup
+        ;;
+    *)
+        printf 'Неподдерживаемый режим установки: %s\n' "${mode}" >&2
+        exit 1
+        ;;
+esac
+
+touch -- "${done_marker}"
+exit 0
+EOF
+    chmod 0755 "${postinst}"
+}
+
+create_control() {
+    local control_file="$1" dependencies="$2" installed_size="$3" description="$4"
+    cat >"${control_file}" <<EOF
+Package: claster-creator
+Version: ${SCRIPT_VERSION}
+Section: database
+Priority: optional
+Architecture: all
+Depends: ${dependencies}
+Maintainer: Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>
+Installed-Size: ${installed_size}
+Description: PostgreSQL cluster creation and recovery utility
+ ${description}
+ Author: Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>.
+EOF
+    chmod 0644 "${control_file}"
+}
+
+build_package() {
+    local package_base output_file payload_dir dependencies installed_size description
+    local -a build_command=(dpkg-deb --build)
+    package_base="$(package_basename)"
+    mkdir -p -- "${OUTPUT_DIR}"
+    OUTPUT_DIR="$(realpath -m -- "${OUTPUT_DIR}")"
+    output_file="${OUTPUT_DIR}/${package_base}.deb"
+    if [[ -e "${output_file}" && "${FORCE_BUILD}" != 1 ]]; then
+        die "файл уже существует: ${output_file}; используйте --force для замены"
+    fi
+
+    BUILD_ROOT="$(mktemp -d "${TMP_DIR}/create-deb.XXXXXX")"
+    cp -a -- "${ROOTFS_SKELETON}/." "${BUILD_ROOT}/"
+    payload_dir="${BUILD_ROOT}${INSTALL_DIR}"
+    mkdir -p -- "${payload_dir}" "${BUILD_ROOT}/usr/local/bin" "${BUILD_ROOT}/DEBIAN"
+    chmod 0755 "${BUILD_ROOT}/DEBIAN"
+
+    install -m 0600 -- "${CONFIG_FILE}" "${payload_dir}/.new-claster.config"
+    install -m 0644 -- "${SCRIPT_DIR}/CHANGELOG.md" "${payload_dir}/CHANGELOG.md"
+    install -m 0755 -- "${SCRIPT_DIR}/create-claster.sh" "${payload_dir}/create-claster.sh"
+    install -m 0644 -- "${SCRIPT_DIR}/README.md" "${payload_dir}/README.md"
+    install -m 0644 -- "${SCRIPT_DIR}/TEST.md" "${payload_dir}/TEST.md"
+    ln -s -- "${INSTALL_DIR}/create-claster.sh" "${BUILD_ROOT}${COMMAND_LINK}"
+    printf '%s\n' "${INSTALL_DIR}/.new-claster.config" >"${BUILD_ROOT}/DEBIAN/conffiles"
+
+    case "${MODE}" in
+        1) description="Installs create-claster.sh, its configuration and documentation." ;;
+        2) description="Installs the utility and creates PostgreSQL cluster ${pg_ver}/${cls_nm}." ;;
+        3) description="Installs the utility and restores PostgreSQL cluster ${pg_ver}/${cls_nm} from a cold backup." ;;
+        4) description="Installs the utility, creates cluster ${pg_ver}/${cls_nm} and restores database ${DATABASE_NAME}." ;;
+    esac
+    if [[ "${MODE}" != 1 ]]; then
+        create_install_plan "${package_base}" "${payload_dir}"
+        create_postinst "${BUILD_ROOT}/DEBIAN/postinst"
+    fi
+    find "${BUILD_ROOT}" -type d -exec chmod 0755 {} +
+    dependencies="$(dependency_list)"
+    installed_size="$(du -sk -- "${BUILD_ROOT}" | awk '{print $1}')"
+    create_control "${BUILD_ROOT}/DEBIAN/control" "${dependencies}" "${installed_size}" "${description}"
+
+    if ((EUID != 0)); then
+        command -v fakeroot >/dev/null 2>&1 || die \
+            "для корректного владельца файлов запустите сценарий от root или установите fakeroot"
+        build_command=(fakeroot dpkg-deb --build)
+    fi
+    if [[ -e "${output_file}" ]]; then
+        rm -f -- "${output_file}"
+    fi
+    "${build_command[@]}" "${BUILD_ROOT}" "${output_file}"
+    printf 'Создан пакет: %s\n' "${output_file}"
+}
+
+main() {
+    handle_early_options "$@"
+    load_defaults
+    parse_args "$@"
+    if [[ -z "${FAKEROOTKEY:-}" ]] && command -v fakeroot >/dev/null 2>&1; then
+        exec fakeroot -- "$0" "$@"
+    fi
+    if interactive_requested; then
+        if ! interactive_configuration; then
+            printf 'Сборка отменена.\n'
+            exit 0
+        fi
+    fi
+    validate_options
+    build_package
+}
+
+main "$@"

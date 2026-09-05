@@ -1,8 +1,67 @@
 #!/usr/bin/env bash
 
+# ==============================================================================
+# Script: create-claster.sh
+# Author: Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>
+#
+# Purpose:
+#   Prepare a PostgreSQL server installed from APT repositories and manage
+#   PostgreSQL clusters on Astra Linux and compatible Debian-based systems.
+#   The script supports PostgreSQL, Postgres Pro Enterprise, and Tantor Free.
+#   It can run as an interactive menu or as a fully non-interactive command.
+#
+# Actions accepted by --action / PGCC_ACTION:
+#   info       Display registered clusters using pg_lsclusters.
+#   install    Install and initialize a new cluster and application roles.
+#   port       Change the TCP port of an existing cluster.
+#   move-data  Move a cluster data directory to a default or custom location.
+#   backup     Create a cold cluster backup or a hot database backup.
+#   restore    Restore a cold cluster backup or a hot database dump.
+#   delete     Delete a cluster; interactive mode can also delete a database.
+#
+# Command-line options:
+#   -h, --help                         Print detailed usage information.
+#   -v, --version                      Print the script version.
+#   -a, --action ACTION                Select a non-interactive action.
+#       --package PACKAGE              Select an exact PostgreSQL server package.
+#       --pg-family FAMILY             postgresql, postgrespro-ent, or tantor-free.
+#       --pg-version VERSION           Select the PostgreSQL major version.
+#       --cluster-name NAME            Set the source, target, or new cluster name.
+#       --port PORT                    Set a cluster TCP port.
+#       --schema NAME                  Set the application schema/owner role.
+#       --user NAME                    Set the application login role.
+#       --password PASSWORD            Set the application role password.
+#       --data-root DIRECTORY          Set a custom root for install/move-data.
+#       --backup-dir DIRECTORY         Set the backup storage/search directory.
+#       --backup-file FILE             Select a relative or absolute restore file.
+#       --backup-type TYPE             Select hot/cold (also accepts 1/2).
+#       --database NAME                Select a database for hot backup/restore.
+#       --backup-before-delete YES|NO  Control backup before cluster deletion.
+#       --clear-wal YES|NO             Control emergency WAL reset before backup.
+#       --overwrite YES|NO             Allow replacement during hot restore.
+#
+# Positional arguments:
+#   The backup and delete actions additionally accept VERSION CLUSTER after the
+#   action, matching the familiar pg_ctlcluster addressing style:
+#     create-claster.sh --action backup 16 subsys
+#     create-claster.sh --action delete 16 subsys --backup-before-delete no
+#
+# Environment interface:
+#   PGCC_ACTION, PGCC_PACKAGE, PGCC_PG_FAMILY, PGCC_PG_VERSION,
+#   PGCC_CLUSTER_NAME, PGCC_CLUSTER_PORT, PGCC_SCHEMA, PGCC_DB_USER,
+#   PGCC_DB_PASSWORD, PGCC_DATA_ROOT, PGCC_BACKUP_DIR, PGCC_BACKUP_FILE,
+#   PGCC_BACKUP_TYPE, PGCC_DATABASE, PGCC_BACKUP_BEFORE_DELETE,
+#   PGCC_CLEAR_WAL, and PGCC_OVERWRITE mirror the command-line options.
+#
+# Configuration:
+#   Defaults are loaded from .new-claster.config located next to this script.
+#   Command-line arguments override environment variables, and environment
+#   variables override configuration defaults. Run --help for complete examples.
+# ==============================================================================
+
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="1.1.0"
+readonly SCRIPT_VERSION="1.2.0"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
