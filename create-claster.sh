@@ -34,6 +34,14 @@ declare CONFIG_CLS_NM=""
 declare CONFIG_CLS_CH=""
 declare CONFIG_CLS_US=""
 declare CONFIG_CLS_PW=""
+declare SELECTED_DATABASE=""
+declare RESTORE_ADMIN_ROLE=""
+declare DATA_DIRECTORY_SIZE_BYTES=""
+declare DATA_DIRECTORY_SIZE_PRETTY=""
+declare DATA_DIRECTORY_DU_SH=""
+declare -a CLUSTER_DATABASES=()
+declare -a CLUSTER_DATABASE_SIZE_BYTES=()
+declare -a CLUSTER_DATABASE_SIZES=()
 
 declare ARG_ACTION=""
 declare ARG_PACKAGE=""
@@ -112,6 +120,8 @@ usage() {
   ${SCRIPT_NAME} --action backup 16 subsys
   ${SCRIPT_NAME} --action restore --backup-file 16-subsys-20260904-152034.tar.gz \\
     --cluster-name subsys2 --port 54322
+  ${SCRIPT_NAME} --action restore --backup-file 16-subsys-20260905-101112-dmp.tar.gz \\
+    --pg-version 16 --cluster-name subsys2 --database targetdb --overwrite yes
   ${SCRIPT_NAME} --action delete --pg-version 16 --cluster-name subsys2 \\
     --backup-before-delete yes --clear-wal no
   ${SCRIPT_NAME} --action delete 16 subsys2 --backup-before-delete no
@@ -636,7 +646,8 @@ ensure_symlink() {
 }
 
 prepare_postgres_root() {
-    mkdir -p /.postgres/systemd/save /.postgres/tmp "${backup_dir}"
+    mkdir -p /.postgres/systemd/save /.postgres/tmp
+    prepare_backup_directory
     ensure_symlink "/etc/postgresql/${pg_ver}" /.postgres/etc
     if [[ -d /.postgres/data && ! -L /.postgres/data ]]; then
         if [[ -L "${DATA_BASE}" && "$(readlink -f "${DATA_BASE}")" == "$(readlink -f /.postgres/data)" ]]; then
@@ -657,6 +668,25 @@ prepare_postgres_root() {
     if [[ "${PG_HOME}" != "/usr/lib/postgresql/${pg_ver}" ]]; then
         mkdir -p /usr/lib/postgresql
         ensure_symlink "${PG_HOME}" "/usr/lib/postgresql/${pg_ver}"
+    fi
+}
+
+prepare_backup_directory() {
+    local access="${1:-read}" resolved
+    if [[ -L "${backup_dir}" ]]; then
+        resolved="$(readlink -f -- "${backup_dir}")" || die \
+            "каталог бэкапов ${backup_dir} является повреждённой символьной ссылкой"
+        [[ -d "${resolved}" ]] || die \
+            "символьная ссылка ${backup_dir} указывает не на каталог: ${resolved}"
+    elif [[ -e "${backup_dir}" ]]; then
+        [[ -d "${backup_dir}" ]] || die "путь бэкапов не является каталогом: ${backup_dir}"
+    else
+        mkdir -p -- "${backup_dir}" || die "не удалось создать каталог бэкапов ${backup_dir}"
+    fi
+    [[ -r "${backup_dir}" && -x "${backup_dir}" ]] || die \
+        "нет доступа к каталогу бэкапов ${backup_dir}"
+    if [[ "${access}" == write && ! -w "${backup_dir}" ]]; then
+        die "нет прав на запись в каталог бэкапов ${backup_dir}"
     fi
 }
 
@@ -1032,14 +1062,18 @@ hot_backup_dump_name() {
 
 backup_filename_supported() {
     local filename="${1##*/}"
-    [[ "${filename}" =~ ^[0-9]+-[a-z_][a-z0-9_]*-[0-9]{8}-[0-9]{6}(-dmp)?\.tar\.gz$ ]]
+    [[ "${filename}" =~ ^[0-9]+-[a-z_][a-z0-9_]*-[0-9]{8}-[0-9]{6}\.tar\.gz$ ]] ||
+        [[ "${filename}" =~ ^[0-9]+-[A-Za-z0-9_][A-Za-z0-9_.-]*-[0-9]{8}-[0-9]{6}-dmp\.tar\.gz$ ]]
 }
 
 list_supported_backup_files() {
     local file
     while IFS= read -r file; do
-        backup_filename_supported "${file}" && printf '%s\n' "${file}"
-    done < <(find "${backup_dir}" -maxdepth 1 -type f -name '*.tar.gz' -printf '%f\n' 2>/dev/null)
+        if backup_filename_supported "${file}"; then
+            printf '%s\n' "${file}"
+        fi
+    done < <(find -H "${backup_dir}" -maxdepth 1 -type f -name '*.tar.gz' -printf '%f\n' 2>/dev/null)
+    return 0
 }
 
 cluster_socket_directory() {
@@ -1057,6 +1091,238 @@ database_exists() {
         "SELECT 1 FROM pg_database WHERE datname='${escaped}'" | grep -qx 1
 }
 
+validate_database_name() {
+    [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
+}
+
+load_cluster_databases() {
+    local home="$1" socket_dir="$2" port="$3" scope="${4:-selectable}"
+    local output row database size_bytes size where_clause
+    local -a database_rows=()
+    CLUSTER_DATABASES=()
+    CLUSTER_DATABASE_SIZE_BYTES=()
+    CLUSTER_DATABASE_SIZES=()
+    case "${scope}" in
+        selectable) where_clause='WHERE datallowconn AND NOT datistemplate' ;;
+        all) where_clause='' ;;
+        *) return 1 ;;
+    esac
+    output="$(
+        runuser -u postgres -- "${home}/bin/psql" -h "${socket_dir}" -p "${port}" \
+            -d postgres -A -t -F $'\t' -q -c \
+            "SELECT datname, size_bytes, pg_size_pretty(size_bytes) FROM (SELECT datname, pg_database_size(datname) AS size_bytes FROM pg_database ${where_clause}) AS database_sizes ORDER BY datname"
+    )" || return 1
+    [[ -n "${output}" ]] && mapfile -t database_rows <<<"${output}"
+    for row in "${database_rows[@]}"; do
+        IFS=$'\t' read -r database size_bytes size <<<"${row}"
+        [[ -n "${database}" ]] || continue
+        CLUSTER_DATABASES+=("${database}")
+        CLUSTER_DATABASE_SIZE_BYTES+=("${size_bytes}")
+        CLUSTER_DATABASE_SIZES+=("${size}")
+    done
+}
+
+print_cluster_databases() {
+    local home="$1" socket_dir="$2" port="$3" version="$4" cluster="$5"
+    local database i=0 name_width=0 number_width
+    load_cluster_databases "${home}" "${socket_dir}" "${port}" || return 1
+    for database in "${CLUSTER_DATABASES[@]}"; do
+        ((${#database} > name_width)) && name_width=${#database}
+    done
+    printf '\nБазы данных кластера %s/%s:\n' "${version}" "${cluster}"
+    if ((${#CLUSTER_DATABASES[@]} == 0)); then
+        printf '  доступные базы данных не найдены\n'
+        return 0
+    fi
+    number_width=${#CLUSTER_DATABASES[@]}
+    number_width=${#number_width}
+    for database in "${CLUSTER_DATABASES[@]}"; do
+        ((i += 1))
+        printf '  %*d - %-*s  %s\n' \
+            "${number_width}" "${i}" "${name_width}" "${database}" \
+            "${CLUSTER_DATABASE_SIZES[i - 1]}"
+    done
+    printf '  %*d - Вернуться назад\n' "${number_width}" 0
+}
+
+write_database_inventory_metadata() {
+    local i
+    printf 'database_count=%q\n' "${#CLUSTER_DATABASES[@]}"
+    for i in "${!CLUSTER_DATABASES[@]}"; do
+        printf 'database_%d_name=%q\n' "$((i + 1))" "${CLUSTER_DATABASES[i]}"
+        printf 'database_%d_size_bytes=%q\n' "$((i + 1))" "${CLUSTER_DATABASE_SIZE_BYTES[i]}"
+        printf 'database_%d_size_pretty=%q\n' "$((i + 1))" "${CLUSTER_DATABASE_SIZES[i]}"
+    done
+}
+
+write_common_backup_metadata() {
+    local backup_type="$1" version="$2" cluster="$3" port="$4" version_text="$5"
+    printf 'backup_format=2\n'
+    printf 'backup_type=%q\n' "${backup_type}"
+    printf 'created_at=%q\n' "$(date --iso-8601=seconds)"
+    printf 'host_name=%q\n' "$(hostname)"
+    printf 'pg_family=%q\n' "${pg}"
+    printf 'pg_version=%q\n' "${version}"
+    printf 'postgres_version_text=%q\n' "${version_text}"
+    printf 'cluster_name=%q\n' "${cluster}"
+    printf 'cluster_port=%q\n' "${port}"
+}
+
+write_hot_database_metadata() {
+    local database="$1" database_index="$2"
+    printf 'database_name=%q\n' "${database}"
+    printf 'database_size_bytes=%q\n' "${CLUSTER_DATABASE_SIZE_BYTES[database_index]}"
+    printf 'database_size_pretty=%q\n' "${CLUSTER_DATABASE_SIZES[database_index]}"
+    printf 'database_count=1\n'
+    printf 'database_1_name=%q\n' "${database}"
+    printf 'database_1_size_bytes=%q\n' "${CLUSTER_DATABASE_SIZE_BYTES[database_index]}"
+    printf 'database_1_size_pretty=%q\n' "${CLUSTER_DATABASE_SIZES[database_index]}"
+}
+
+measure_data_directory() {
+    local data="$1" size_line bytes_line
+    [[ -d "${data}" ]] || die "каталог данных не найден: ${data}"
+    size_line="$(du -sh -- "${data}")" || die \
+        "не удалось определить размер каталога данных ${data} командой du -sh"
+    bytes_line="$(du -s --block-size=1 -- "${data}")" || die \
+        "не удалось определить размер каталога данных ${data} в байтах"
+    DATA_DIRECTORY_DU_SH="${size_line}"
+    DATA_DIRECTORY_SIZE_PRETTY="${size_line%%[[:space:]]*}"
+    DATA_DIRECTORY_SIZE_BYTES="${bytes_line%%[[:space:]]*}"
+    [[ "${DATA_DIRECTORY_SIZE_BYTES}" =~ ^[0-9]+$ ]] || die \
+        "получен некорректный размер каталога данных ${data}"
+}
+
+database_in_loaded_list() {
+    local expected="$1" database
+    for database in "${CLUSTER_DATABASES[@]}"; do
+        [[ "${database}" == "${expected}" ]] && return 0
+    done
+    return 1
+}
+
+database_number_in_loaded_list() {
+    local expected="$1" database number=0
+    for database in "${CLUSTER_DATABASES[@]}"; do
+        ((number += 1))
+        if [[ "${database}" == "${expected}" ]]; then
+            printf '%s' "${number}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+select_existing_database() {
+    local label="$1" default="$2" choice index
+    SELECTED_DATABASE=""
+    while true; do
+        read -r -p "${label} [${default}]: " choice || return 1
+        choice="${choice:-${default}}"
+        if [[ "${choice}" =~ ^[0-9]+$ ]]; then
+            ((choice == 0)) && return 1
+            index=$((choice - 1))
+            if ((index >= 0 && index < ${#CLUSTER_DATABASES[@]})); then
+                SELECTED_DATABASE="${CLUSTER_DATABASES[index]}"
+                return 0
+            fi
+            warn "неверный номер базы данных"
+            continue
+        fi
+        validate_database_name "${choice}" || {
+            warn "допустимы латинские буквы, цифры, точка, дефис и подчёркивание"
+            continue
+        }
+        if database_in_loaded_list "${choice}"; then
+            SELECTED_DATABASE="${choice}"
+            return 0
+        fi
+        warn "база данных ${choice} отсутствует в выбранном кластере"
+    done
+}
+
+select_restore_database() {
+    local label="$1" default="$2" choice index
+    SELECTED_DATABASE=""
+    while true; do
+        read -r -p "${label} [${default}]: " choice || return 1
+        choice="${choice:-${default}}"
+        if [[ "${choice}" =~ ^[0-9]+$ ]]; then
+            ((choice == 0)) && return 1
+            index=$((choice - 1))
+            if ((index >= 0 && index < ${#CLUSTER_DATABASES[@]})); then
+                SELECTED_DATABASE="${CLUSTER_DATABASES[index]}"
+                return 0
+            fi
+            warn "неверный номер базы данных"
+            continue
+        fi
+        validate_database_name "${choice}" || {
+            warn "допустимы латинские буквы, цифры, точка, дефис и подчёркивание"
+            continue
+        }
+        SELECTED_DATABASE="${choice}"
+        return 0
+    done
+}
+
+create_database() {
+    local home="$1" socket_dir="$2" port="$3" database="$4" owner="${5:-postgres}"
+    [[ -x "${home}/bin/createdb" ]] || die "не найден ${home}/bin/createdb"
+    validate_database_name "${database}" || die "недопустимое имя базы данных: ${database}"
+    validate_database_name "${owner}" || die "недопустимое имя роли-владельца: ${owner}"
+    runuser -u postgres -- "${home}/bin/createdb" --host="${socket_dir}" \
+        --port="${port}" --owner="${owner}" -- "${database}" || die \
+        "не удалось создать базу данных ${database}"
+}
+
+role_exists() {
+    local home="$1" socket_dir="$2" port="$3" role="$4" escaped
+    escaped="${role//\'/\'\'}"
+    runuser -u postgres -- "${home}/bin/psql" -h "${socket_dir}" -p "${port}" \
+        -d postgres -Atqc "SELECT 1 FROM pg_roles WHERE rolname='${escaped}'" | grep -qx 1
+}
+
+create_restore_admin_role() {
+    local home="$1" socket_dir="$2" port="$3" role="$4" role_sql password_sql
+    validate_database_name "${role}" || die "недопустимое имя роли из дампа: ${role}"
+    role_sql="${role//\"/\"\"}"
+    password_sql="${role//\'/\'\'}"
+    printf 'Создание отсутствующей роли администратора %s...\n' "${role}"
+    runuser -u postgres -- "${home}/bin/psql" -h "${socket_dir}" -p "${port}" \
+        -d postgres -v ON_ERROR_STOP=1 \
+        -c "CREATE ROLE \"${role_sql}\" WITH LOGIN PASSWORD '${password_sql}' SUPERUSER CREATEDB CREATEROLE REPLICATION VALID UNTIL 'infinity'" || die \
+        "не удалось создать роль администратора ${role}"
+}
+
+dump_owner_roles() {
+    local home="$1" dump_file="$2" line role
+    while IFS= read -r line; do
+        [[ -n "${line}" && "${line}" != \;* ]] || continue
+        # У записей без владельца pg_restore оставляет пробел в конце строки.
+        [[ ! "${line}" =~ [[:space:]]$ ]] || continue
+        role="${line##* }"
+        validate_database_name "${role}" || continue
+        printf '%s\n' "${role}"
+    done < <("${home}/bin/pg_restore" --list "${dump_file}")
+}
+
+ensure_restore_roles() {
+    local home="$1" socket_dir="$2" port="$3" dump_file="$4"
+    local role
+    local -a roles=()
+    RESTORE_ADMIN_ROLE=""
+    mapfile -t roles < <(dump_owner_roles "${home}" "${dump_file}" | sort -u)
+    for role in "${roles[@]}"; do
+        [[ "${role}" == postgres || "${role}" == pg_* ]] && continue
+        if [[ -z "${RESTORE_ADMIN_ROLE}" ]]; then
+            RESTORE_ADMIN_ROLE="${role}"
+        fi
+        role_exists "${home}" "${socket_dir}" "${port}" "${role}" && continue
+        create_restore_admin_role "${home}" "${socket_dir}" "${port}" "${role}"
+    done
+}
+
 resolve_backup_file() {
     local requested="$1" candidate
     if [[ "${requested}" == /* ]]; then
@@ -1068,6 +1334,21 @@ resolve_backup_file() {
     fi
     [[ -f "${candidate}" ]] || return 1
     readlink -f -- "${candidate}"
+}
+
+validate_hot_backup_archive_contents() {
+    local archive="$1" dump_name="$2" entry dump_entries=0 metadata_entries=0
+    local -a entries=()
+    mapfile -t entries < <(tar -tzf "${archive}")
+    for entry in "${entries[@]}"; do
+        case "${entry}" in
+            "${dump_name}") ((dump_entries += 1)) ;;
+            backup-info.env) ((metadata_entries += 1)) ;;
+            *) die "недопустимый файл в горячем архиве: ${entry}" ;;
+        esac
+    done
+    ((dump_entries == 1)) || die "в горячем архиве должен находиться файл ${dump_name}"
+    ((metadata_entries <= 1)) || die "в горячем архиве найдено несколько файлов backup-info.env"
 }
 
 replace_literal_in_file() {
@@ -1099,17 +1380,37 @@ make_cold_backup() {
     local version="$1" name="$2" port="$3" status="$4" owner="$5" data="$6" log="$7"
     local restart_after="${8:-no}" was_online=no
     local home reset_tool unit_dir service archive timestamp meta_tmp rel cluster_package version_text
+    local socket_dir metadata_started=no
     local -a paths=()
+    prepare_backup_directory write
     timestamp="$(date +%Y%m%d-%H%M%S)"
     archive="${backup_dir}/$(backup_archive_name "${version}" "${name}" "${timestamp}")"
     home="$(cluster_pg_home "${version}" "${data}")"
     unit_dir="$(systemd_unit_dir)"
     service="postgresql@${version}-${name}.service"
 
+    if [[ "${status}" != online* ]]; then
+        printf 'Кластер %s/%s временно запускается для записи имён и размеров БД...\n' \
+            "${version}" "${name}"
+        start_cluster_checked "${version}" "${name}"
+        metadata_started=yes
+    fi
+    socket_dir="$(cluster_socket_directory "${port}")" || {
+        [[ "${metadata_started}" == yes ]] && stop_cluster_checked "${version}" "${name}"
+        die "не найден Unix-сокет кластера ${version}/${name} для сбора метаданных"
+    }
+    if ! load_cluster_databases "${home}" "${socket_dir}" "${port}" all; then
+        [[ "${metadata_started}" == yes ]] && stop_cluster_checked "${version}" "${name}"
+        die "не удалось получить имена и размеры БД кластера ${version}/${name}"
+    fi
+    if [[ "${metadata_started}" == yes ]]; then
+        stop_cluster_checked "${version}" "${name}"
+    fi
+
     if [[ "${status}" == online* ]]; then
         was_online=yes
         stop_cluster_checked "${version}" "${name}"
-    else
+    elif [[ "${metadata_started}" != yes ]]; then
         printf 'Кластер %s/%s уже остановлен.\n' "${version}" "${name}"
     fi
     if { ((NON_INTERACTIVE)) && [[ "${CLEAR_WAL}" == yes ]]; } || \
@@ -1120,6 +1421,10 @@ make_cold_backup() {
         [[ -n "${reset_tool}" ]] || die "не найден pg_resetwal или pg_resetxlog"
         runuser -u postgres -- "${reset_tool}" -f "${data}" || die "не удалось очистить WAL"
     fi
+
+    measure_data_directory "${data}"
+    printf '\nРазмер каталога данных перед холодным бэкапом (du -sh):\n  %s\n' \
+        "${DATA_DIRECTORY_DU_SH}"
 
     [[ -e "/etc/postgresql/${version}/${name}" ]] && paths+=("etc/postgresql/${version}/${name}")
     rel="${data#/}"; [[ -e "${data}" ]] && paths+=("${rel}")
@@ -1139,18 +1444,16 @@ make_cold_backup() {
     CLEANUP_DIR="$(mktemp -d /tmp/create-claster.backup.XXXXXX)"
     meta_tmp="${CLEANUP_DIR}"
     {
-        printf 'backup_format=1\n'
-        printf 'created_at=%q\n' "$(date --iso-8601=seconds)"
+        write_common_backup_metadata cold "${version}" "${name}" "${port}" "${version_text}"
         printf 'package=%q\n' "${cluster_package}"
-        printf 'pg_family=%q\n' "${pg}"
-        printf 'pg_version=%q\n' "${version}"
-        printf 'cluster_name=%q\n' "${name}"
-        printf 'cluster_port=%q\n' "${port}"
         printf 'cluster_owner=%q\n' "${owner}"
         printf 'data_dir=%q\n' "${data}"
+        printf 'data_directory_size_bytes=%q\n' "${DATA_DIRECTORY_SIZE_BYTES}"
+        printf 'data_directory_size_pretty=%q\n' "${DATA_DIRECTORY_SIZE_PRETTY}"
+        printf 'data_directory_du_sh=%q\n' "${DATA_DIRECTORY_DU_SH}"
         printf 'log_file=%q\n' "${log}"
         printf 'service_file=%q\n' "${unit_dir}/${service}"
-        printf 'postgres_version_text=%q\n' "${version_text}"
+        write_database_inventory_metadata
     } >"${meta_tmp}/backup-info.env"
     tar --dereference -czf "${archive}" --transform='s,^,root/,' -C / "${paths[@]}" \
         -C "${meta_tmp}" backup-info.env || die "не удалось создать резервную копию"
@@ -1165,20 +1468,23 @@ make_cold_backup() {
 
 make_hot_backup() {
     local version="$1" cluster="$2" port="$3" status="$4" data="$5" database="$6"
-    local home socket_dir timestamp archive dump_name stage
+    local database_verified="${7:-no}"
+    local home socket_dir timestamp archive dump_name stage version_text database_number database_index
+    prepare_backup_directory write
     [[ "${status}" == online* ]] || die "для горячего бэкапа кластер ${version}/${cluster} должен быть запущен"
-    validate_identifier "${database}" || die "недопустимое имя базы данных: ${database}"
+    validate_database_name "${database}" || die "недопустимое имя базы данных: ${database}"
     home="$(cluster_pg_home "${version}" "${data}")"
     [[ -x "${home}/bin/pg_dump" ]] || die "не найден ${home}/bin/pg_dump"
     socket_dir="$(cluster_socket_directory "${port}")" || die \
         "не найден Unix-сокет запущенного кластера ${version}/${cluster} на порту ${port}"
-    database_exists "${home}" "${socket_dir}" "${port}" "${database}" || die \
-        "база данных ${database} отсутствует в кластере ${version}/${cluster}"
+    if [[ "${database_verified}" != yes ]]; then
+        database_exists "${home}" "${socket_dir}" "${port}" "${database}" || die \
+            "база данных ${database} отсутствует в кластере ${version}/${cluster}"
+    fi
 
     timestamp="$(date +%Y%m%d-%H%M%S)"
     archive="${backup_dir}/$(hot_backup_archive_name "${version}" "${database}" "${timestamp}")"
     dump_name="$(hot_backup_dump_name "${version}" "${database}" "${timestamp}")"
-    mkdir -p -- "${backup_dir}"
     CLEANUP_DIR="$(mktemp -d /tmp/create-claster.hot-backup.XXXXXX)"
     stage="${CLEANUP_DIR}"
     chown postgres:postgres "${stage}"
@@ -1188,15 +1494,27 @@ make_hot_backup() {
         --host="${socket_dir}" --port="${port}" --dbname="${database}" \
         --file="${stage}/${dump_name}" || die "не удалось создать горячий дамп базы ${database}"
     [[ -s "${stage}/${dump_name}" ]] || die "pg_dump создал пустой файл ${dump_name}"
-    tar -czf "${archive}" -C "${stage}" "${dump_name}" || die "не удалось упаковать горячий дамп"
+    load_cluster_databases "${home}" "${socket_dir}" "${port}" || die \
+        "не удалось получить размер базы данных ${database}"
+    database_number="$(database_number_in_loaded_list "${database}")" || die \
+        "база данных ${database} отсутствует после создания дампа"
+    database_index=$((database_number - 1))
+    version_text="$("${home}/bin/postgres" --version)"
+    {
+        write_common_backup_metadata hot "${version}" "${cluster}" "${port}" "${version_text}"
+        write_hot_database_metadata "${database}" "${database_index}"
+    } >"${stage}/backup-info.env"
+    tar -czf "${archive}" -C "${stage}" "${dump_name}" backup-info.env || die \
+        "не удалось упаковать горячий дамп"
     rm -rf -- "${stage}"
     CLEANUP_DIR=""
     printf 'Горячая резервная копия создана: %s\n' "${archive}"
     printf 'Файл дампа в архиве: %s\n' "${dump_name}"
+    printf 'Метаданные в архиве: backup-info.env\n'
 }
 
 backup_menu() {
-    local row version name port status owner data log choice database
+    local row version name port status owner data log choice database home socket_dir
     header
     step "Кластер: Бэкап"
     if ((NON_INTERACTIVE)); then
@@ -1220,19 +1538,40 @@ backup_menu() {
     read -r version name port status owner data log <<<"${row}"
     printf '\nВыбран кластер %s/%s, данные: %s\n' "${version}" "${name}" "${data}"
     if [[ "${choice}" == hot ]]; then
+        if [[ "${status}" != online* ]]; then
+            if ((NON_INTERACTIVE)); then
+                die "для горячего бэкапа кластер ${version}/${name} должен быть запущен"
+            fi
+            warn "для горячего бэкапа кластер ${version}/${name} должен быть запущен"
+            pause
+            return 0
+        fi
         if ((NON_INTERACTIVE)); then
             ((TARGET_DATABASE_SET)) || die \
                 "для горячего backup укажите --database или PGCC_DATABASE"
             database="${DATABASE_NAME}"
         else
-            while true; do
-                database="$(prompt_value "Имя базы данных" "${name}")" || return 0
-                validate_identifier "${database}" || { warn "недопустимое имя базы данных"; continue; }
-                break
-            done
+            home="$(cluster_pg_home "${version}" "${data}")"
+            socket_dir="$(cluster_socket_directory "${port}")" || {
+                warn "не найден Unix-сокет кластера ${version}/${name} на порту ${port}"
+                pause
+                return 0
+            }
+            print_cluster_databases "${home}" "${socket_dir}" "${port}" "${version}" "${name}"
+            ((${#CLUSTER_DATABASES[@]})) || { warn "в кластере нет доступных баз данных"; pause; return 0; }
+            if ! database="$(database_number_in_loaded_list "${name}")"; then
+                database=1
+            fi
+            select_existing_database "Выберите БД (номер из списка или точное имя)" \
+                "${database}" || return 0
+            database="${SELECTED_DATABASE}"
         fi
         if confirm "Создать горячий бэкап базы ${database}?" Y; then
-            make_hot_backup "${version}" "${name}" "${port}" "${status}" "${data}" "${database}"
+            if ((NON_INTERACTIVE)); then
+                make_hot_backup "${version}" "${name}" "${port}" "${status}" "${data}" "${database}"
+            else
+                make_hot_backup "${version}" "${name}" "${port}" "${status}" "${data}" "${database}" yes
+            fi
         else
             warn "создание бэкапа отменено"
         fi
@@ -1277,10 +1616,10 @@ delete_menu() {
 
 restore_hot_backup() {
     local archive="$1" filename source_version source_database timestamp dump_name
-    local row version name port status owner data log home socket_dir target_database stage entry
-    local -a entries=()
+    local row version name port status owner data log home socket_dir target_database stage
+    local create_target_database=no
     filename="${archive##*/}"
-    if [[ "${filename}" =~ ^([0-9]+)-([a-z_][a-z0-9_]*)-([0-9]{8})-([0-9]{6})-dmp\.tar\.gz$ ]]; then
+    if [[ "${filename}" =~ ^([0-9]+)-([A-Za-z0-9_][A-Za-z0-9_.-]*)-([0-9]{8})-([0-9]{6})-dmp\.tar\.gz$ ]]; then
         source_version="${BASH_REMATCH[1]}"
         source_database="${BASH_REMATCH[2]}"
         timestamp="${BASH_REMATCH[3]}-${BASH_REMATCH[4]}"
@@ -1311,46 +1650,68 @@ restore_hot_backup() {
         ((TARGET_DATABASE_SET)) || die \
             "для горячего restore укажите --database или PGCC_DATABASE"
         target_database="${DATABASE_NAME}"
-        validate_identifier "${target_database}" || die "недопустимое имя базы данных: ${target_database}"
-        database_exists "${home}" "${socket_dir}" "${port}" "${target_database}" || die \
-            "база данных ${target_database} отсутствует в кластере ${version}/${name}"
+        validate_database_name "${target_database}" || die "недопустимое имя базы данных: ${target_database}"
+        database_exists "${home}" "${socket_dir}" "${port}" "${target_database}" || \
+            create_target_database=yes
     else
-        while true; do
-            target_database="$(prompt_value "Имя целевой базы данных" "${source_database}")" || return 0
-            validate_identifier "${target_database}" || { warn "недопустимое имя базы данных"; continue; }
-            if ! database_exists "${home}" "${socket_dir}" "${port}" "${target_database}"; then
-                warn "база данных ${target_database} отсутствует в кластере ${version}/${name}"
-                continue
-            fi
-            break
-        done
+        print_cluster_databases "${home}" "${socket_dir}" "${port}" "${version}" "${name}"
+        if ! target_database="$(database_number_in_loaded_list "${source_database}")"; then
+            target_database="${source_database}"
+        fi
+        select_restore_database \
+            "Выберите целевую БД (номер из списка либо имя существующей или новой БД)" \
+            "${target_database}" || return 0
+        target_database="${SELECTED_DATABASE}"
+        if ! database_in_loaded_list "${target_database}"; then
+            warn "база данных ${target_database} отсутствует в кластере ${version}/${name}; она будет создана"
+            create_target_database=yes
+        fi
     fi
-    printf 'Цель: кластер %s/%s, база %s, порт %s\n' \
-        "${version}" "${name}" "${target_database}" "${port}"
-    if ((NON_INTERACTIVE)); then
+    if [[ "${create_target_database}" == yes ]]; then
+        printf 'Цель: кластер %s/%s, новая база %s, порт %s\n' \
+            "${version}" "${name}" "${target_database}" "${port}"
+    else
+        printf 'Цель: кластер %s/%s, существующая база %s, порт %s\n' \
+            "${version}" "${name}" "${target_database}" "${port}"
+    fi
+    if ((NON_INTERACTIVE)) && [[ "${create_target_database}" == no ]]; then
         [[ "${OVERWRITE_EXISTING}" == yes ]] || die \
-            "для горячего restore задайте --overwrite yes или PGCC_OVERWRITE=yes"
+            "для горячего restore поверх существующей БД задайте --overwrite yes или PGCC_OVERWRITE=yes"
+    elif ((NON_INTERACTIVE)); then
+        :
+    elif [[ "${create_target_database}" == yes ]]; then
+        confirm "Создать базу ${target_database} и восстановить горячий бэкап?" Y || return 0
     else
         confirm "Очистить существующие объекты и восстановить горячий бэкап?" N || return 0
     fi
 
-    mapfile -t entries < <(tar -tzf "${archive}")
-    ((${#entries[@]} == 1)) || die "горячий архив должен содержать ровно один файл дампа"
-    entry="${entries[0]}"
-    [[ "${entry}" == "${dump_name}" ]] || die \
-        "в горячем архиве ожидался файл ${dump_name}, найден ${entry}"
+    validate_hot_backup_archive_contents "${archive}" "${dump_name}"
     CLEANUP_DIR="$(mktemp -d /tmp/create-claster.hot-restore.XXXXXX)"
     stage="${CLEANUP_DIR}"
     tar -xzf "${archive}" -C "${stage}" -- "${dump_name}" || die "не удалось извлечь горячий дамп"
     [[ -f "${stage}/${dump_name}" && ! -L "${stage}/${dump_name}" ]] || die \
         "извлечённый дамп не является обычным файлом"
     chown -R postgres:postgres "${stage}"
+    ensure_restore_roles "${home}" "${socket_dir}" "${port}" "${stage}/${dump_name}"
+    if [[ "${create_target_database}" == yes ]]; then
+        printf 'Создание базы данных %s в кластере %s/%s...\n' \
+            "${target_database}" "${version}" "${name}"
+        create_database "${home}" "${socket_dir}" "${port}" "${target_database}" \
+            "${RESTORE_ADMIN_ROLE:-postgres}"
+    fi
     printf 'Восстановление базы %s в кластере %s/%s...\n' \
         "${target_database}" "${version}" "${name}"
-    runuser -u postgres -- "${home}/bin/pg_restore" --verbose --exit-on-error \
-        --clean --if-exists --host="${socket_dir}" --port="${port}" \
-        --dbname="${target_database}" "${stage}/${dump_name}" || die \
-        "не удалось восстановить горячий бэкап в базу ${target_database}"
+    if [[ "${create_target_database}" == yes ]]; then
+        runuser -u postgres -- "${home}/bin/pg_restore" --verbose --exit-on-error \
+            --host="${socket_dir}" --port="${port}" --dbname="${target_database}" \
+            "${stage}/${dump_name}" || die \
+            "не удалось восстановить горячий бэкап в базу ${target_database}"
+    else
+        runuser -u postgres -- "${home}/bin/pg_restore" --verbose --exit-on-error \
+            --clean --if-exists --host="${socket_dir}" --port="${port}" \
+            --dbname="${target_database}" "${stage}/${dump_name}" || die \
+            "не удалось восстановить горячий бэкап в базу ${target_database}"
+    fi
     rm -rf -- "${stage}"
     CLEANUP_DIR=""
     printf 'Горячий бэкап восстановлен в %s/%s, база %s.\n' \
@@ -1367,6 +1728,7 @@ restore_menu() {
     local -a transform_args=()
     header
     step "Кластер: Рестори"
+    prepare_backup_directory read
     if ((NON_INTERACTIVE)); then
         [[ -n "${BACKUP_FILE}" ]] || die \
             "для restore укажите --backup-file или PGCC_BACKUP_FILE"
