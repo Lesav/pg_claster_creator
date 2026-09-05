@@ -61,7 +61,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="1.2.0"
+readonly SCRIPT_VERSION="2.0.0"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
@@ -105,6 +105,17 @@ declare STARTUP_PREPARATION=0
 declare -a CLUSTER_DATABASES=()
 declare -a CLUSTER_DATABASE_SIZE_BYTES=()
 declare -a CLUSTER_DATABASE_SIZES=()
+declare -a BACKUP_ROLE_NAMES=()
+declare -a BACKUP_ROLE_SUPERUSERS=()
+declare -a BACKUP_ROLE_INHERITS=()
+declare -a BACKUP_ROLE_CREATE_ROLES=()
+declare -a BACKUP_ROLE_CREATE_DBS=()
+declare -a BACKUP_ROLE_CAN_LOGINS=()
+declare -a BACKUP_ROLE_REPLICATIONS=()
+declare -a BACKUP_ROLE_BYPASS_RLS=()
+declare -a BACKUP_ROLE_CONNECTION_LIMITS=()
+declare -a BACKUP_ROLE_VALID_UNTILS=()
+declare -a BACKUP_ROLE_PASSWORD_HASHES=()
 
 declare ARG_ACTION=""
 declare ARG_PACKAGE=""
@@ -1646,6 +1657,93 @@ write_hot_database_metadata() {
     printf 'database_1_size_pretty=%q\n' "${CLUSTER_DATABASE_SIZES[database_index]}"
 }
 
+load_hot_backup_roles() {
+    local home="$1" socket_dir="$2" port="$3" database="$4"
+    local database_sql output row name superuser inherit create_role create_db can_login
+    local replication bypass_rls connection_limit valid_until password_hash
+    local -a role_rows=()
+    database_sql="${database//\'/\'\'}"
+    BACKUP_ROLE_NAMES=()
+    BACKUP_ROLE_SUPERUSERS=()
+    BACKUP_ROLE_INHERITS=()
+    BACKUP_ROLE_CREATE_ROLES=()
+    BACKUP_ROLE_CREATE_DBS=()
+    BACKUP_ROLE_CAN_LOGINS=()
+    BACKUP_ROLE_REPLICATIONS=()
+    BACKUP_ROLE_BYPASS_RLS=()
+    BACKUP_ROLE_CONNECTION_LIMITS=()
+    BACKUP_ROLE_VALID_UNTILS=()
+    BACKUP_ROLE_PASSWORD_HASHES=()
+    output="$(
+        runuser -u postgres -- "${home}/bin/psql" -h "${socket_dir}" -p "${port}" \
+            -d postgres -A -t -F '|' -q -c \
+            "WITH target_database AS (
+                 SELECT oid, datdba FROM pg_database WHERE datname='${database_sql}'
+             ), referenced_roles AS (
+                 SELECT datdba AS role_oid FROM target_database
+                 UNION
+                 SELECT dependency.refobjid
+                   FROM pg_shdepend AS dependency
+                   CROSS JOIN target_database
+                  WHERE dependency.refclassid='pg_authid'::regclass
+                    AND (dependency.dbid=target_database.oid
+                         OR (dependency.dbid=0
+                             AND dependency.classid='pg_database'::regclass
+                             AND dependency.objid=target_database.oid))
+             )
+             SELECT role.rolname,
+                    CASE WHEN role.rolsuper THEN 'yes' ELSE 'no' END,
+                    CASE WHEN role.rolinherit THEN 'yes' ELSE 'no' END,
+                    CASE WHEN role.rolcreaterole THEN 'yes' ELSE 'no' END,
+                    CASE WHEN role.rolcreatedb THEN 'yes' ELSE 'no' END,
+                    CASE WHEN role.rolcanlogin THEN 'yes' ELSE 'no' END,
+                    CASE WHEN role.rolreplication THEN 'yes' ELSE 'no' END,
+                    CASE WHEN role.rolbypassrls THEN 'yes' ELSE 'no' END,
+                    role.rolconnlimit,
+                    COALESCE(role.rolvaliduntil::text, ''),
+                    COALESCE(role.rolpassword, '')
+               FROM pg_authid AS role
+               JOIN referenced_roles ON referenced_roles.role_oid=role.oid
+              WHERE role.rolname <> 'postgres' AND role.rolname !~ '^pg_'
+              ORDER BY role.rolname"
+    )" || return 1
+    [[ -n "${output}" ]] && mapfile -t role_rows <<<"${output}"
+    for row in "${role_rows[@]}"; do
+        IFS='|' read -r name superuser inherit create_role create_db can_login \
+            replication bypass_rls connection_limit valid_until password_hash <<<"${row}"
+        [[ -n "${name}" ]] || continue
+        BACKUP_ROLE_NAMES+=("${name}")
+        BACKUP_ROLE_SUPERUSERS+=("${superuser}")
+        BACKUP_ROLE_INHERITS+=("${inherit}")
+        BACKUP_ROLE_CREATE_ROLES+=("${create_role}")
+        BACKUP_ROLE_CREATE_DBS+=("${create_db}")
+        BACKUP_ROLE_CAN_LOGINS+=("${can_login}")
+        BACKUP_ROLE_REPLICATIONS+=("${replication}")
+        BACKUP_ROLE_BYPASS_RLS+=("${bypass_rls}")
+        BACKUP_ROLE_CONNECTION_LIMITS+=("${connection_limit}")
+        BACKUP_ROLE_VALID_UNTILS+=("${valid_until}")
+        BACKUP_ROLE_PASSWORD_HASHES+=("${password_hash}")
+    done
+}
+
+write_hot_backup_role_metadata() {
+    local i
+    printf 'role_count=%q\n' "${#BACKUP_ROLE_NAMES[@]}"
+    for i in "${!BACKUP_ROLE_NAMES[@]}"; do
+        printf 'role_%d_name=%q\n' "$((i + 1))" "${BACKUP_ROLE_NAMES[i]}"
+        printf 'role_%d_superuser=%q\n' "$((i + 1))" "${BACKUP_ROLE_SUPERUSERS[i]}"
+        printf 'role_%d_inherit=%q\n' "$((i + 1))" "${BACKUP_ROLE_INHERITS[i]}"
+        printf 'role_%d_create_role=%q\n' "$((i + 1))" "${BACKUP_ROLE_CREATE_ROLES[i]}"
+        printf 'role_%d_create_db=%q\n' "$((i + 1))" "${BACKUP_ROLE_CREATE_DBS[i]}"
+        printf 'role_%d_can_login=%q\n' "$((i + 1))" "${BACKUP_ROLE_CAN_LOGINS[i]}"
+        printf 'role_%d_replication=%q\n' "$((i + 1))" "${BACKUP_ROLE_REPLICATIONS[i]}"
+        printf 'role_%d_bypass_rls=%q\n' "$((i + 1))" "${BACKUP_ROLE_BYPASS_RLS[i]}"
+        printf 'role_%d_connection_limit=%q\n' "$((i + 1))" "${BACKUP_ROLE_CONNECTION_LIMITS[i]}"
+        printf 'role_%d_valid_until=%q\n' "$((i + 1))" "${BACKUP_ROLE_VALID_UNTILS[i]}"
+        printf 'role_%d_password_hash=%q\n' "$((i + 1))" "${BACKUP_ROLE_PASSWORD_HASHES[i]}"
+    done
+}
+
 measure_data_directory() {
     local data="$1" size_line bytes_line
     [[ -d "${data}" ]] || die "каталог данных не найден: ${data}"
@@ -1762,6 +1860,63 @@ create_restore_admin_role() {
         "не удалось создать роль администратора ${role}"
 }
 
+decode_backup_metadata_value() {
+    local value="$1"
+    if [[ "${value}" == "''" ]]; then
+        printf ''
+    else
+        printf '%s' "${value}" | sed -E 's/\\(.)/\1/g'
+    fi
+}
+
+backup_metadata_file_value() {
+    local metadata_file="$1" key="$2" line
+    [[ -f "${metadata_file}" && ! -L "${metadata_file}" ]] || return 1
+    while IFS= read -r line; do
+        if [[ "${line%%=*}" == "${key}" ]]; then
+            decode_backup_metadata_value "${line#*=}"
+            return 0
+        fi
+    done <"${metadata_file}"
+    return 1
+}
+
+create_restore_role_from_metadata() {
+    local home="$1" socket_dir="$2" port="$3" role="$4" superuser="$5" inherit="$6"
+    local create_role="$7" create_db="$8" can_login="$9" replication="${10}"
+    local bypass_rls="${11}" connection_limit="${12}" valid_until="${13}" password_hash="${14}"
+    local role_sql password_sql valid_until_sql password_clause="" valid_until_clause=""
+    local superuser_option inherit_option create_role_option create_db_option login_option
+    local replication_option bypass_rls_option
+    validate_database_name "${role}" || die "недопустимое имя роли в метаданных: ${role}"
+    [[ "${connection_limit}" =~ ^-?[0-9]+$ ]] || die \
+        "некорректный лимит подключений роли ${role} в метаданных"
+    case "${superuser}" in yes) superuser_option=SUPERUSER ;; no) superuser_option=NOSUPERUSER ;; *) die "некорректный признак superuser роли ${role}" ;; esac
+    case "${inherit}" in yes) inherit_option=INHERIT ;; no) inherit_option=NOINHERIT ;; *) die "некорректный признак inherit роли ${role}" ;; esac
+    case "${create_role}" in yes) create_role_option=CREATEROLE ;; no) create_role_option=NOCREATEROLE ;; *) die "некорректный признак create_role роли ${role}" ;; esac
+    case "${create_db}" in yes) create_db_option=CREATEDB ;; no) create_db_option=NOCREATEDB ;; *) die "некорректный признак create_db роли ${role}" ;; esac
+    case "${can_login}" in yes) login_option=LOGIN ;; no) login_option=NOLOGIN ;; *) die "некорректный признак can_login роли ${role}" ;; esac
+    case "${replication}" in yes) replication_option=REPLICATION ;; no) replication_option=NOREPLICATION ;; *) die "некорректный признак replication роли ${role}" ;; esac
+    case "${bypass_rls}" in yes) bypass_rls_option=BYPASSRLS ;; no) bypass_rls_option=NOBYPASSRLS ;; *) die "некорректный признак bypass_rls роли ${role}" ;; esac
+    role_sql="${role//\"/\"\"}"
+    if [[ -n "${password_hash}" ]]; then
+        [[ "${password_hash}" =~ ^md5[0-9a-fA-F]{32}$ || \
+           "${password_hash}" =~ ^SCRAM-SHA-256\$[0-9]+:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$ ]] || die \
+            "неподдерживаемый формат хеша пароля роли ${role}"
+        password_sql="${password_hash//\'/\'\'}"
+        password_clause=" PASSWORD '${password_sql}'"
+    fi
+    if [[ -n "${valid_until}" ]]; then
+        valid_until_sql="${valid_until//\'/\'\'}"
+        valid_until_clause=" VALID UNTIL '${valid_until_sql}'"
+    fi
+    printf 'Создание отсутствующей роли %s из метаданных бэкапа...\n' "${role}"
+    runuser -u postgres -- "${home}/bin/psql" -h "${socket_dir}" -p "${port}" \
+        -d postgres -v ON_ERROR_STOP=1 -c \
+        "CREATE ROLE \"${role_sql}\" WITH ${login_option} ${superuser_option} ${inherit_option} ${create_role_option} ${create_db_option} ${replication_option} ${bypass_rls_option} CONNECTION LIMIT ${connection_limit}${password_clause}${valid_until_clause}" || die \
+        "не удалось создать роль ${role} из метаданных бэкапа"
+}
+
 dump_owner_roles() {
     local home="$1" dump_file="$2" line role
     while IFS= read -r line; do
@@ -1775,8 +1930,9 @@ dump_owner_roles() {
 }
 
 ensure_restore_roles() {
-    local home="$1" socket_dir="$2" port="$3" dump_file="$4"
-    local role
+    local home="$1" socket_dir="$2" port="$3" dump_file="$4" metadata_file="${5:-}"
+    local role count i superuser inherit create_role create_db can_login replication bypass_rls
+    local connection_limit valid_until password_hash
     local -a roles=()
     RESTORE_ADMIN_ROLE=""
     mapfile -t roles < <(dump_owner_roles "${home}" "${dump_file}" | sort -u)
@@ -1785,6 +1941,33 @@ ensure_restore_roles() {
         if [[ -z "${RESTORE_ADMIN_ROLE}" ]]; then
             RESTORE_ADMIN_ROLE="${role}"
         fi
+    done
+    if [[ -n "${metadata_file}" ]]; then
+        count="$(backup_metadata_file_value "${metadata_file}" role_count || printf '0')"
+        [[ "${count}" =~ ^[0-9]+$ ]] && ((count <= 10000)) || die \
+            "некорректное количество ролей в метаданных горячего бэкапа"
+        for ((i = 1; i <= count; i++)); do
+            role="$(backup_metadata_file_value "${metadata_file}" "role_${i}_name" || true)"
+            [[ -n "${role}" ]] || die "в метаданных отсутствует имя роли ${i}"
+            [[ "${role}" == postgres || "${role}" == pg_* ]] && continue
+            role_exists "${home}" "${socket_dir}" "${port}" "${role}" && continue
+            superuser="$(backup_metadata_file_value "${metadata_file}" "role_${i}_superuser" || true)"
+            inherit="$(backup_metadata_file_value "${metadata_file}" "role_${i}_inherit" || true)"
+            create_role="$(backup_metadata_file_value "${metadata_file}" "role_${i}_create_role" || true)"
+            create_db="$(backup_metadata_file_value "${metadata_file}" "role_${i}_create_db" || true)"
+            can_login="$(backup_metadata_file_value "${metadata_file}" "role_${i}_can_login" || true)"
+            replication="$(backup_metadata_file_value "${metadata_file}" "role_${i}_replication" || true)"
+            bypass_rls="$(backup_metadata_file_value "${metadata_file}" "role_${i}_bypass_rls" || true)"
+            connection_limit="$(backup_metadata_file_value "${metadata_file}" "role_${i}_connection_limit" || true)"
+            valid_until="$(backup_metadata_file_value "${metadata_file}" "role_${i}_valid_until" || true)"
+            password_hash="$(backup_metadata_file_value "${metadata_file}" "role_${i}_password_hash" || true)"
+            create_restore_role_from_metadata "${home}" "${socket_dir}" "${port}" "${role}" \
+                "${superuser}" "${inherit}" "${create_role}" "${create_db}" "${can_login}" \
+                "${replication}" "${bypass_rls}" "${connection_limit}" "${valid_until}" "${password_hash}"
+        done
+    fi
+    for role in "${roles[@]}"; do
+        [[ "${role}" == postgres || "${role}" == pg_* ]] && continue
         role_exists "${home}" "${socket_dir}" "${port}" "${role}" && continue
         create_restore_admin_role "${home}" "${socket_dir}" "${port}" "${role}"
     done
@@ -1935,7 +2118,7 @@ make_cold_backup() {
 make_hot_backup() {
     local version="$1" cluster="$2" port="$3" status="$4" data="$5" database="$6"
     local database_verified="${7:-no}"
-    local home socket_dir timestamp archive dump_name stage version_text database_number database_index
+    local home socket_dir timestamp archive dump_name stage version_text database_number database_index archive_mode
     prepare_backup_directory write
     [[ "${status}" == online* ]] || die "для горячего бэкапа кластер ${version}/${cluster} должен быть запущен"
     validate_database_name "${database}" || die "недопустимое имя базы данных: ${database}"
@@ -1965,18 +2148,26 @@ make_hot_backup() {
     database_number="$(database_number_in_loaded_list "${database}")" || die \
         "база данных ${database} отсутствует после создания дампа"
     database_index=$((database_number - 1))
+    load_hot_backup_roles "${home}" "${socket_dir}" "${port}" "${database}" || die \
+        "не удалось получить роли базы данных ${database}"
     version_text="$("${home}/bin/postgres" --version)"
     {
         write_common_backup_metadata hot "${version}" "${cluster}" "${port}" "${version_text}"
         write_hot_database_metadata "${database}" "${database_index}"
+        write_hot_backup_role_metadata
     } >"${stage}/backup-info.env"
     tar -czf "${archive}" -C "${stage}" "${dump_name}" backup-info.env || die \
         "не удалось упаковать горячий дамп"
+    chmod 0600 "${archive}" || die "не удалось защитить файл горячего бэкапа ${archive}"
+    archive_mode="$(stat -c '%a' -- "${archive}" 2>/dev/null || true)"
+    [[ "${archive_mode}" == 600 ]] || warn \
+        "файловая система не применила права 0600 к ${archive}; ограничьте доступ средствами файловой системы"
     rm -rf -- "${stage}"
     CLEANUP_DIR=""
     printf 'Горячая резервная копия создана: %s\n' "${archive}"
     printf 'Файл дампа в архиве: %s\n' "${dump_name}"
     printf 'Метаданные в архиве: backup-info.env\n'
+    printf 'Роли в метаданных: %s\n' "${#BACKUP_ROLE_NAMES[@]}"
 }
 
 backup_menu() {
@@ -2213,7 +2404,7 @@ delete_menu() {
 
 restore_hot_backup() {
     local archive="$1" filename source_version source_database timestamp dump_name
-    local row version name port status owner data log home socket_dir target_database stage
+    local row version name port status owner data log home socket_dir target_database stage metadata_file=""
     local create_target_database=no
     filename="${archive##*/}"
     if [[ "${filename}" =~ ^([0-9]+)-([A-Za-z0-9_][A-Za-z0-9_.-]*)-([0-9]{8})-([0-9]{6})-dmp\.tar\.gz$ ]]; then
@@ -2285,11 +2476,20 @@ restore_hot_backup() {
     validate_hot_backup_archive_contents "${archive}" "${dump_name}"
     CLEANUP_DIR="$(mktemp -d /tmp/create-claster.hot-restore.XXXXXX)"
     stage="${CLEANUP_DIR}"
-    tar -xzf "${archive}" -C "${stage}" -- "${dump_name}" || die "не удалось извлечь горячий дамп"
+    if tar -tzf "${archive}" | grep -Fxq 'backup-info.env'; then
+        tar -xzf "${archive}" -C "${stage}" -- "${dump_name}" backup-info.env || die \
+            "не удалось извлечь горячий дамп и его метаданные"
+        [[ -f "${stage}/backup-info.env" && ! -L "${stage}/backup-info.env" ]] || die \
+            "извлечённый метафайл не является обычным файлом"
+        metadata_file="${stage}/backup-info.env"
+    else
+        tar -xzf "${archive}" -C "${stage}" -- "${dump_name}" || die \
+            "не удалось извлечь горячий дамп"
+    fi
     [[ -f "${stage}/${dump_name}" && ! -L "${stage}/${dump_name}" ]] || die \
         "извлечённый дамп не является обычным файлом"
     chown -R postgres:postgres "${stage}"
-    ensure_restore_roles "${home}" "${socket_dir}" "${port}" "${stage}/${dump_name}"
+    ensure_restore_roles "${home}" "${socket_dir}" "${port}" "${stage}/${dump_name}" "${metadata_file}"
     if [[ "${create_target_database}" == yes ]]; then
         printf 'Создание базы данных %s в кластере %s/%s...\n' \
             "${target_database}" "${version}" "${name}"

@@ -1,0 +1,183 @@
+.TH CREATE-CLASTER.SH 1 "2026-09-05" "pg_claster_creator 2.0.0" "User Commands"
+.SH NAME
+create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
+.SH SYNOPSIS
+.B create-claster.sh
+.RI [ options ]
+.br
+.B create-claster.sh
+.B --action
+.I action
+.RI [ options ]
+.RI [ version " " cluster ]
+.SH DESCRIPTION
+.B create-claster.sh
+is an interactive and non-interactive administration utility for PostgreSQL,
+Postgres Pro Enterprise, and Tantor Free on APT-based Linux systems.
+It verifies required packages, prepares the service filesystem, and manages
+cluster installation, ports, data placement, backups, restores, databases,
+roles, and deletion.
+.PP
+Without
+.BR --action ,
+the program opens an interactive menu. Supplying an action or its matching
+.B PGCC_ACTION
+environment variable disables prompts and requires all action-specific values.
+.SH ACTIONS
+.TP
+.B info
+Display registered clusters using
+.BR pg_lsclusters (1).
+.TP
+.B install
+Create a cluster, database, schema, application roles, and systemd unit.
+.TP
+.B port
+Change the TCP port of an existing cluster.
+.TP
+.B move-data
+Move a cluster data directory to the default placement or to
+.IR ROOT/pg_VERSION/CLUSTER .
+.TP
+.B backup
+Create a cold cluster archive or a hot custom-format database dump.
+.TP
+.B restore
+Restore a cold cluster archive or a hot database dump.
+.TP
+.B delete
+Delete a cluster. Interactive mode can also delete one database.
+.SH OPTIONS
+.TP
+.BR -h , " --help"
+Print complete usage information and exit.
+.TP
+.BR -v , " --version"
+Print the program version and exit.
+.TP
+.BI "-a, --action " ACTION
+Select a non-interactive action.
+.TP
+.BI "--package " PACKAGE
+Select an exact PostgreSQL server package.
+.TP
+.BI "--pg-family " FAMILY
+Select
+.BR postgresql ,
+.BR postgrespro-ent ,
+or
+.BR tantor-free .
+.TP
+.BI "--pg-version " VERSION
+Set the PostgreSQL major version.
+.TP
+.BI "--cluster-name " NAME
+Set the source, target, or new cluster name.
+.TP
+.BI "--port " PORT
+Set the cluster TCP port.
+.TP
+.BI "--schema " NAME
+Set the application schema and owner role.
+.TP
+.BI "--user " NAME
+Set the application login role.
+.TP
+.BI "--password " PASSWORD
+Set the application role password.
+.TP
+.BI "--data-root " DIRECTORY
+Select a custom root for cluster installation or data movement.
+.TP
+.BI "--backup-dir " DIRECTORY
+Select backup storage and search directory.
+.TP
+.BI "--backup-file " FILE
+Select a relative or absolute archive for restore.
+.TP
+.BI "--backup-type " TYPE
+Select
+.B hot
+or
+.B cold;
+numeric aliases 1 and 2 are accepted.
+.TP
+.BI "--database " NAME
+Select a database for hot backup or restore.
+.TP
+.BI "--backup-before-delete " YES|NO
+Control cold backup before cluster deletion. The default is yes.
+.TP
+.BI "--clear-wal " YES|NO
+Control emergency WAL reset before cold backup. The default is no.
+.TP
+.BI "--overwrite " YES|NO
+Permit replacement of an existing database during hot restore.
+.SH POSITIONAL TARGET
+The
+.B backup
+and
+.B delete
+actions accept
+.I VERSION CLUSTER
+after the action, following the familiar
+.B pg_ctlcluster
+addressing style. Do not mix positional targeting with the corresponding named
+options.
+.SH BACKUPS
+Cold archives contain configuration, data, the selected log file, systemd unit,
+and metadata. Hot archives contain a custom-format dump and
+.IR backup-info.env .
+Hot metadata records database size and referenced application roles, including
+available SCRAM or MD5 password verifiers. Missing roles are created before hot
+restore; existing and system roles are not changed.
+.SH ENVIRONMENT
+Command-line options override the corresponding variables:
+.BR PGCC_ACTION ,
+.BR PGCC_PACKAGE ,
+.BR PGCC_PG_FAMILY ,
+.BR PGCC_PG_VERSION ,
+.BR PGCC_CLUSTER_NAME ,
+.BR PGCC_CLUSTER_PORT ,
+.BR PGCC_SCHEMA ,
+.BR PGCC_DB_USER ,
+.BR PGCC_DB_PASSWORD ,
+.BR PGCC_DATA_ROOT ,
+.BR PGCC_BACKUP_DIR ,
+.BR PGCC_BACKUP_FILE ,
+.BR PGCC_BACKUP_TYPE ,
+.BR PGCC_DATABASE ,
+.BR PGCC_BACKUP_BEFORE_DELETE ,
+.BR PGCC_CLEAR_WAL ,
+and
+.BR PGCC_OVERWRITE .
+.SH FILES
+.TP
+.I /usr/local/share/pg_claster_creator/.new-claster.config
+Persistent defaults.
+.TP
+.I /.postgres
+Service filesystem and default backup hierarchy.
+.TP
+.I /usr/local/bin/create-claster.sh
+Installed command symlink.
+.SH EXAMPLES
+.nf
+sudo create-claster.sh
+sudo create-claster.sh --action info
+sudo create-claster.sh --action install --pg-version 16 \
+  --cluster-name subsys --port 5432
+sudo create-claster.sh --action backup 16 subsys \
+  --backup-type hot --database asvd
+sudo create-claster.sh --action restore \
+  --backup-file /backup/16-asvd-20260905-105802-dmp.tar.gz \
+  --pg-version 16 --cluster-name subsys --database asvd
+.fi
+.SH SEE ALSO
+.BR create-claster-backup.sh (1),
+.BR pg_lsclusters (1),
+.BR pg_ctlcluster (1),
+.BR pg_dump (1),
+.BR pg_restore (1)
+.SH AUTHOR
+Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>

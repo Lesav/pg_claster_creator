@@ -1,0 +1,182 @@
+.TH CREATE-CLASTER.SH 1 "2026-09-05" "pg_claster_creator 2.0.0" "Команды пользователя"
+.SH ИМЯ
+create-claster.sh \- подготовка пакетов PostgreSQL и управление кластерами
+.SH СИНТАКСИС
+.B create-claster.sh
+.RI [ ключи ]
+.br
+.B create-claster.sh
+.B --action
+.I действие
+.RI [ ключи ]
+.RI [ версия " " кластер ]
+.SH ОПИСАНИЕ
+.B create-claster.sh
+\- интерактивное и неинтерактивное средство администрирования PostgreSQL,
+Postgres Pro Enterprise и Tantor Free в Linux-системах с APT.
+Сценарий проверяет обязательные пакеты, готовит служебную файловую структуру,
+устанавливает и удаляет кластеры, переключает порты, перемещает данные,
+управляет базами, ролями, резервным копированием и восстановлением.
+.PP
+Без
+.B --action
+открывается интерактивное меню. Передача действия или переменной
+.B PGCC_ACTION
+отключает диалоги и требует указать все обязательные параметры операции.
+.SH ДЕЙСТВИЯ
+.TP
+.B info
+Показать зарегистрированные кластеры командой
+.BR pg_lsclusters (1).
+.TP
+.B install
+Создать кластер, БД, схему, прикладные роли и unit systemd.
+.TP
+.B port
+Изменить TCP-порт существующего кластера.
+.TP
+.B move-data
+Переместить data-каталог в дефолтное размещение либо в
+.IR КОРЕНЬ/pg_ВЕРСИЯ/КЛАСТЕР .
+.TP
+.B backup
+Создать холодный архив кластера либо горячий дамп БД.
+.TP
+.B restore
+Восстановить холодный архив кластера либо горячий дамп БД.
+.TP
+.B delete
+Удалить кластер. В интерактивном режиме можно удалить отдельную БД.
+.SH КЛЮЧИ
+.TP
+.BR -h , " --help"
+Показать полную справку и завершить работу.
+.TP
+.BR -v , " --version"
+Показать версию сценария и завершить работу.
+.TP
+.BI "-a, --action " ДЕЙСТВИЕ
+Выбрать неинтерактивное действие.
+.TP
+.BI "--package " ПАКЕТ
+Задать точный серверный пакет PostgreSQL.
+.TP
+.BI "--pg-family " СЕМЕЙСТВО
+Выбрать
+.BR postgresql ,
+.BR postgrespro-ent
+или
+.BR tantor-free .
+.TP
+.BI "--pg-version " ВЕРСИЯ
+Задать основную версию PostgreSQL.
+.TP
+.BI "--cluster-name " ИМЯ
+Задать имя исходного, целевого или нового кластера.
+.TP
+.BI "--port " ПОРТ
+Задать TCP-порт кластера.
+.TP
+.BI "--schema " ИМЯ
+Задать прикладную схему и роль-владельца.
+.TP
+.BI "--user " ИМЯ
+Задать прикладную роль с правом входа.
+.TP
+.BI "--password " ПАРОЛЬ
+Задать пароль прикладной роли.
+.TP
+.BI "--data-root " КАТАЛОГ
+Задать корень для установки кластера или перемещения данных.
+.TP
+.BI "--backup-dir " КАТАЛОГ
+Задать каталог хранения и поиска резервных копий.
+.TP
+.BI "--backup-file " ФАЙЛ
+Задать относительный или абсолютный путь архива для восстановления.
+.TP
+.BI "--backup-type " ТИП
+Выбрать
+.B hot
+или
+.B cold;
+также принимаются номера 1 и 2.
+.TP
+.BI "--database " ИМЯ
+Выбрать БД для горячего бэкапа или восстановления.
+.TP
+.BI "--backup-before-delete " ДА|НЕТ
+Управлять холодным бэкапом перед удалением кластера. По умолчанию да.
+.TP
+.BI "--clear-wal " ДА|НЕТ
+Управлять аварийным сбросом WAL перед холодным бэкапом. По умолчанию нет.
+.TP
+.BI "--overwrite " ДА|НЕТ
+Разрешить замену существующей БД при горячем восстановлении.
+.SH ПОЗИЦИОННАЯ ЦЕЛЬ
+Действия
+.B backup
+и
+.B delete
+принимают
+.I ВЕРСИЯ КЛАСТЕР
+после действия по аналогии с адресацией
+.BR pg_ctlcluster .
+Позиционную форму нельзя смешивать с соответствующими именованными ключами.
+.SH РЕЗЕРВНЫЕ КОПИИ
+Холодный архив содержит конфигурацию, данные, выбранный журнал, unit systemd и
+метаданные. Горячий архив содержит custom-format дамп и
+.IR backup-info.env .
+В горячих метаданных сохраняются размер БД и связанные прикладные роли, включая
+доступные SCRAM/MD5-хеши паролей. Отсутствующие роли создаются до восстановления;
+существующие и системные роли не изменяются.
+.SH ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
+Ключи командной строки имеют приоритет над переменными:
+.BR PGCC_ACTION ,
+.BR PGCC_PACKAGE ,
+.BR PGCC_PG_FAMILY ,
+.BR PGCC_PG_VERSION ,
+.BR PGCC_CLUSTER_NAME ,
+.BR PGCC_CLUSTER_PORT ,
+.BR PGCC_SCHEMA ,
+.BR PGCC_DB_USER ,
+.BR PGCC_DB_PASSWORD ,
+.BR PGCC_DATA_ROOT ,
+.BR PGCC_BACKUP_DIR ,
+.BR PGCC_BACKUP_FILE ,
+.BR PGCC_BACKUP_TYPE ,
+.BR PGCC_DATABASE ,
+.BR PGCC_BACKUP_BEFORE_DELETE ,
+.BR PGCC_CLEAR_WAL
+и
+.BR PGCC_OVERWRITE .
+.SH ФАЙЛЫ
+.TP
+.I /usr/local/share/pg_claster_creator/.new-claster.config
+Постоянные значения по умолчанию.
+.TP
+.I /.postgres
+Служебная файловая структура и дефолтное дерево бэкапов.
+.TP
+.I /usr/local/bin/create-claster.sh
+Установленная ссылка команды.
+.SH ПРИМЕРЫ
+.nf
+sudo create-claster.sh
+sudo create-claster.sh --action info
+sudo create-claster.sh --action install --pg-version 16 \
+  --cluster-name subsys --port 5432
+sudo create-claster.sh --action backup 16 subsys \
+  --backup-type hot --database asvd
+sudo create-claster.sh --action restore \
+  --backup-file /backup/16-asvd-20260905-105802-dmp.tar.gz \
+  --pg-version 16 --cluster-name subsys --database asvd
+.fi
+.SH СМ. ТАКЖЕ
+.BR create-claster-backup.sh (1),
+.BR pg_lsclusters (1),
+.BR pg_ctlcluster (1),
+.BR pg_dump (1),
+.BR pg_restore (1)
+.SH АВТОР
+Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>

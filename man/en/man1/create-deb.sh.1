@@ -1,0 +1,132 @@
+.TH CREATE-DEB.SH 1 "2026-09-05" "pg_claster_creator 2.0.0" "Developer Commands"
+.SH NAME
+create-deb.sh \- build claster-creator Debian packages
+.SH SYNOPSIS
+.B create-deb.sh
+.RI [ options ]
+.SH DESCRIPTION
+.B create-deb.sh
+builds installable Debian packages from the project source tree. It creates a
+fresh filesystem skeleton below
+.IR tmp/create-deb.XXXXXX/rootFs ,
+populates it, builds the package, and removes the temporary tree on exit.
+Packages are written to
+.I dist
+unless another output directory is selected.
+.PP
+With no arguments, an interactive mode menu is shown. Modes 2 through 4 are
+interactive by default; use
+.B --non-interactive
+for automation. Every package depends on
+.BR postgresql-common .
+.SH MODES
+.TP
+.B 1
+Install management and scheduled-backup scripts, configuration, documentation,
+manual pages, and command symlinks.
+.TP
+.B 2
+Install the files and create an empty PostgreSQL cluster.
+.TP
+.B 3
+Install the files and restore a cluster from an embedded cold backup.
+.TP
+.B 4
+Install the files, create a cluster, and restore an embedded hot database dump.
+.SH OPTIONS
+.TP
+.BR -h , " --help"
+Print complete usage information and exit.
+.TP
+.BR -v , " --version"
+Print the builder version and exit.
+.TP
+.BI "-m, --mode " MODE
+Select mode 1, 2, 3, or 4.
+.TP
+.BI "--pg-family " FAMILY
+Select postgresql, postgrespro-ent, or tantor-free.
+.TP
+.BI "--pg-version " VERSION
+Set the PostgreSQL major version.
+.TP
+.BI "--cluster-name " NAME
+Set the target cluster name.
+.TP
+.BI "--port " PORT
+Set the target TCP port.
+.TP
+.BI "--package " PACKAGE
+Set an exact server package and dependency.
+.TP
+.BI "--schema " NAME
+Set the schema and owner role for a new cluster.
+.TP
+.BI "--user " NAME
+Set the application login role.
+.TP
+.BI "--password " PASSWORD
+Set the password stored in the protected deployment plan.
+.TP
+.BI "--data-root " DIRECTORY
+Set a custom cluster data root.
+.TP
+.BI "--backup-file " FILE
+Select a cold backup for mode 3 or a hot backup for mode 4.
+.TP
+.BI "--backup-dir " DIRECTORY
+Select the directory used by interactive backup selection.
+.TP
+.BI "--database " NAME
+Set the target database for mode 4.
+.TP
+.BI "--depends " PACKAGES
+Add comma-separated Debian package dependencies. The option may be repeated and
+is accepted only in modes 2 through 4.
+.TP
+.BI "--output-dir " DIRECTORY
+Select the package destination. The default is
+.IR dist .
+.TP
+.BR -i , " --interactive"
+Explicitly enable the mode 2 through 4 configuration dialog.
+.TP
+.BR -n , " --non-interactive"
+Disable prompts and require complete arguments.
+.TP
+.BR -f , " --force"
+Replace an existing output package.
+.SH PACKAGE NAMES
+.nf
+claster-creator-VERSION.deb
+claster-creator-VERSION-PG-PGVER-CLUSTER-empty.deb
+claster-creator-VERSION-PG-PGVER-CLUSTER-fill.deb
+claster-creator-VERSION-PG-PGVER-CLUSTER-DATABASE.deb
+.fi
+.SH FILES
+.TP
+.I .new-claster.config
+Interactive defaults.
+.TP
+.I tmp/create-deb.XXXXXX/rootFs
+Temporary package filesystem skeleton.
+.TP
+.I dist
+Default output directory.
+.SH EXAMPLES
+.nf
+\&./create-deb.sh
+\&./create-deb.sh --mode 1
+\&./create-deb.sh --mode 2 --depends postgis,pgbouncer
+\&./create-deb.sh --mode 3 --backup-dir /.postgres/backup
+\&./create-deb.sh --mode 4 --non-interactive \
+  --pg-family postgrespro-ent --pg-version 16 \
+  --cluster-name subsys --database asvd \
+  --backup-file /.postgres/backup/16-asvd-20260905-105802-dmp.tar.gz
+.fi
+.SH SEE ALSO
+.BR create-claster.sh (1),
+.BR create-claster-backup.sh (1),
+.BR dpkg-deb (1)
+.SH AUTHOR
+Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>

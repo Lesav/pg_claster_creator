@@ -1,0 +1,92 @@
+.TH CREATE-CLASTER-BACKUP.SH 1 "2026-09-05" "pg_claster_creator 2.0.0" "User Commands"
+.SH NAME
+create-claster-backup.sh \- create and rotate non-interactive hot database backups
+.SH SYNOPSIS
+.B create-claster-backup.sh
+.RI [ options ]
+.I version cluster database
+.SH DESCRIPTION
+.B create-claster-backup.sh
+calls
+.BR create-claster.sh (1)
+in non-interactive hot-backup mode for one existing PostgreSQL database.
+The default backup directory is read from
+.IR .new-claster.config .
+.PP
+Optional rotation runs only after a successful backup. Files are selected without
+opening archives, using the strict mask
+.IR VERSION-DATABASE-YYYYMMDD-hhmmss-dmp.tar.gz .
+At least the newest matching archive is retained.
+.SH OPTIONS
+.TP
+.BR -h , " --help"
+Print complete usage information and exit.
+.TP
+.BR -v , " --version"
+Print the program version and exit.
+.TP
+.BI "--backup-dir " DIRECTORY
+Select the backup directory. The configured value or
+.I /.postgres/backup
+is used by default.
+.TP
+.BI "--files-cnt " COUNT
+Keep at most COUNT archives matching this version and database.
+.TP
+.BI "--files-size " SIZE
+Limit total size of matching archives. SIZE is a positive integer in bytes or
+uses B, K/KB/KiB, M/MB/MiB, G/GB/GiB, or T/TB/TiB.
+.TP
+.B --cron
+Interactively create or replace a task below
+.IR /etc/cron.d .
+The operator must select hourly, daily, weekly, monthly, or a safe custom
+five-field numeric cron expression. If no retention option is supplied, the
+dialog also requires a file-count or total-size limit.
+.SH RETENTION
+.B --files-cnt
+and
+.B --files-size
+are mutually exclusive. Rotation never reads backup metadata. Because the hot
+archive filename does not contain the cluster name, databases with the same name
+and PostgreSQL version share a rotation group when stored in the same directory.
+Use separate
+.B --backup-dir
+values to isolate those tasks.
+.PP
+When the newest archive alone exceeds a size limit it is preserved and a warning
+is printed. A per-version, cluster, and database
+.BR flock (1)
+prevents concurrent executions of the same task.
+.SH CRON FILES
+A task is written atomically as
+.IR /etc/cron.d/pg-claster-backup-* ,
+runs as root, and calls this program without
+.BR --cron .
+Output is appended to the matching
+.IR /var/log/pg-claster-backup-*.log .
+.SH FILES
+.TP
+.I /usr/local/share/pg_claster_creator/.new-claster.config
+Provides the default backup directory.
+.TP
+.I /usr/local/bin/create-claster-backup.sh
+Installed command symlink.
+.TP
+.I /run/lock/pg-claster-backup-*.lock
+Per-task non-blocking lock.
+.SH EXAMPLES
+.nf
+sudo create-claster-backup.sh 16 subsys asvd
+sudo create-claster-backup.sh 16 subsys asvd \
+  --backup-dir /BACKUP/postgresql --files-cnt 14
+sudo create-claster-backup.sh 16 subsys asvd --files-size 20GiB
+sudo create-claster-backup.sh 16 subsys asvd --cron --files-cnt 30
+.fi
+.SH SEE ALSO
+.BR create-claster.sh (1),
+.BR cron (8),
+.BR crontab (5),
+.BR flock (1)
+.SH AUTHOR
+Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>

@@ -1,0 +1,131 @@
+.TH CREATE-DEB.SH 1 "2026-09-05" "pg_claster_creator 2.0.0" "Команды разработчика"
+.SH ИМЯ
+create-deb.sh \- сборка Debian-пакетов claster-creator
+.SH СИНТАКСИС
+.B create-deb.sh
+.RI [ ключи ]
+.SH ОПИСАНИЕ
+.B create-deb.sh
+формирует устанавливаемые Debian-пакеты из дерева исходного проекта. Для каждой
+сборки создаётся чистый файловый скелет
+.IR tmp/create-deb.XXXXXX/rootFs ,
+который наполняется и удаляется при завершении. По умолчанию результат сохраняется
+в каталоге
+.IR dist .
+.PP
+Без аргументов выводится интерактивное меню режимов. Режимы 2\(en4 по умолчанию
+также интерактивны; для автоматизации предназначен
+.BR --non-interactive .
+Каждый пакет зависит от
+.BR postgresql-common .
+.SH РЕЖИМЫ
+.TP
+.B 1
+Установить сценарии управления и планового бэкапа, конфиг, документацию,
+man-страницы и командные ссылки.
+.TP
+.B 2
+Установить файлы и создать пустой кластер PostgreSQL.
+.TP
+.B 3
+Установить файлы и восстановить кластер из встроенного холодного бэкапа.
+.TP
+.B 4
+Установить файлы, создать кластер и восстановить встроенный горячий дамп БД.
+.SH КЛЮЧИ
+.TP
+.BR -h , " --help"
+Показать полную справку и завершить работу.
+.TP
+.BR -v , " --version"
+Показать версию сборщика и завершить работу.
+.TP
+.BI "-m, --mode " РЕЖИМ
+Выбрать режим 1, 2, 3 или 4.
+.TP
+.BI "--pg-family " СЕМЕЙСТВО
+Выбрать postgresql, postgrespro-ent или tantor-free.
+.TP
+.BI "--pg-version " ВЕРСИЯ
+Задать основную версию PostgreSQL.
+.TP
+.BI "--cluster-name " ИМЯ
+Задать имя целевого кластера.
+.TP
+.BI "--port " ПОРТ
+Задать целевой TCP-порт.
+.TP
+.BI "--package " ПАКЕТ
+Задать точный серверный пакет и зависимость.
+.TP
+.BI "--schema " ИМЯ
+Задать схему и роль-владельца нового кластера.
+.TP
+.BI "--user " ИМЯ
+Задать прикладную роль с правом входа.
+.TP
+.BI "--password " ПАРОЛЬ
+Задать пароль в защищённом плане развёртывания.
+.TP
+.BI "--data-root " КАТАЛОГ
+Задать пользовательский корень данных кластера.
+.TP
+.BI "--backup-file " ФАЙЛ
+Выбрать холодный бэкап для режима 3 либо горячий для режима 4.
+.TP
+.BI "--backup-dir " КАТАЛОГ
+Задать каталог интерактивного выбора бэкапов.
+.TP
+.BI "--database " ИМЯ
+Задать целевую БД для режима 4.
+.TP
+.BI "--depends " ПАКЕТЫ
+Добавить зависимости через запятую. Ключ можно повторять; он поддерживается
+только в режимах 2\(en4.
+.TP
+.BI "--output-dir " КАТАЛОГ
+Задать каталог результата. По умолчанию
+.IR dist .
+.TP
+.BR -i , " --interactive"
+Явно включить диалог настройки режимов 2\(en4.
+.TP
+.BR -n , " --non-interactive"
+Отключить запросы и потребовать все параметры в ключах.
+.TP
+.BR -f , " --force"
+Разрешить замену существующего файла результата.
+.SH ИМЕНА ПАКЕТОВ
+.nf
+claster-creator-ВЕРСИЯ.deb
+claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-empty.deb
+claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-fill.deb
+claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-БД.deb
+.fi
+.SH ФАЙЛЫ
+.TP
+.I .new-claster.config
+Интерактивные значения по умолчанию.
+.TP
+.I tmp/create-deb.XXXXXX/rootFs
+Временный файловый скелет пакета.
+.TP
+.I dist
+Дефолтный каталог результатов.
+.SH ПРИМЕРЫ
+.nf
+\&./create-deb.sh
+\&./create-deb.sh --mode 1
+\&./create-deb.sh --mode 2 --depends postgis,pgbouncer
+\&./create-deb.sh --mode 3 --backup-dir /.postgres/backup
+\&./create-deb.sh --mode 4 --non-interactive \
+  --pg-family postgrespro-ent --pg-version 16 \
+  --cluster-name subsys --database asvd \
+  --backup-file /.postgres/backup/16-asvd-20260905-105802-dmp.tar.gz
+.fi
+.SH СМ. ТАКЖЕ
+.BR create-claster.sh (1),
+.BR create-claster-backup.sh (1),
+.BR dpkg-deb (1)
+.SH АВТОР
+Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>

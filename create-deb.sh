@@ -5,11 +5,11 @@
 # Author: Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>
 #
 # Purpose:
-#   Build installable Debian packages for create-claster.sh from the filesystem
-#   skeleton stored in tmp/rootFs. Temporary build trees are created under tmp,
-#   and completed packages are written to dist unless another output directory
-#   is requested. With no --mode argument, the script opens an interactive mode
-#   selection menu. Modes 2-4 generate an idempotent postinst deployment
+#   Build installable Debian packages for create-claster.sh. For every build,
+#   the script creates a fresh root filesystem skeleton below tmp, populates it,
+#   and removes it on exit. Completed packages are written to dist unless another
+#   output directory is requested. With no --mode argument, the script opens an
+#   interactive mode selection menu. Modes 2-4 generate an idempotent postinst deployment
 #   procedure; --mode 1 performs a direct scripts-only package build.
 #
 # Package modes accepted by --mode:
@@ -56,13 +56,13 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-deb.sh"
-readonly SCRIPT_VERSION="1.2.0"
+readonly SCRIPT_VERSION="2.0.0"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
-readonly ROOTFS_SKELETON="${SCRIPT_DIR}/tmp/rootFs"
 readonly TMP_DIR="${SCRIPT_DIR}/tmp"
 readonly INSTALL_DIR="/usr/local/share/pg_claster_creator"
 readonly COMMAND_LINK="/usr/local/bin/create-claster.sh"
+readonly BACKUP_COMMAND_LINK="/usr/local/bin/create-claster-backup.sh"
 
 MODE=""
 OUTPUT_DIR="${SCRIPT_DIR}/dist"
@@ -75,6 +75,7 @@ EXTRA_DEPENDENCIES_INPUT=""
 INTERACTIVE_MODE="yes"
 MOVE_AFTER_RESTORE="no"
 FORCE_BUILD=0
+BUILD_WORK_DIR=""
 BUILD_ROOT=""
 META_TEXT=""
 META_BACKUP_TYPE=""
@@ -180,8 +181,9 @@ die() {
 }
 
 cleanup() {
-    if [[ -n "${BUILD_ROOT}" && -n "${TMP_DIR}" && "${BUILD_ROOT}" == "${TMP_DIR}/create-deb."* ]]; then
-        rm -rf -- "${BUILD_ROOT}"
+    if [[ -n "${BUILD_WORK_DIR}" && -n "${TMP_DIR}" && \
+          "${BUILD_WORK_DIR}" == "${TMP_DIR}/create-deb."* ]]; then
+        rm -rf -- "${BUILD_WORK_DIR}"
     fi
 }
 
@@ -420,7 +422,7 @@ read_backup_metadata() {
 }
 
 print_backup_metadata() {
-    local kind="$1" count i name size
+    local kind="$1" count i name size role_login
     printf '\nМетаданные выбранного бэкапа:\n'
     printf '  Тип:                 %s\n' "$(backup_kind_label "${kind}")"
     printf '  Файл:                %s\n' "${BACKUP_FILE}"
@@ -443,6 +445,17 @@ print_backup_metadata() {
             size="$(metadata_value "database_${i}_size_pretty" || true)"
             printf '    %-24s %s\n' "${name}" "${size}"
         done
+    fi
+    count="$(metadata_value role_count || printf '0')"
+    if [[ "${count}" =~ ^[0-9]+$ ]] && ((count > 0)); then
+        printf '  Роли БД:\n'
+        for ((i = 1; i <= count; i++)); do
+            name="$(metadata_value "role_${i}_name" || true)"
+            role_login="$(metadata_value "role_${i}_can_login" || true)"
+            if [[ "${role_login}" == yes ]]; then role_login=LOGIN; else role_login=NOLOGIN; fi
+            printf '    %-24s %s\n' "${name}" "${role_login}"
+        done
+        printf '  Хеши паролей ролей сохранены в метафайле и не выводятся.\n'
     fi
 }
 
@@ -755,10 +768,12 @@ validate_options() {
     fi
     normalize_extra_dependencies || die \
         "--depends принимает имена DEB-пакетов через запятую без условий версий"
-    [[ -d "${ROOTFS_SKELETON}" ]] || die "не найден скелет файловой системы ${ROOTFS_SKELETON}"
-    [[ -d "${TMP_DIR}" ]] || die "не найден служебный каталог ${TMP_DIR}"
+    mkdir -p -- "${TMP_DIR}" || die "не удалось создать служебный каталог ${TMP_DIR}"
+    [[ -d "${TMP_DIR}" && ! -L "${TMP_DIR}" ]] || die \
+        "служебный путь должен быть обычным каталогом: ${TMP_DIR}"
     command -v dpkg-deb >/dev/null 2>&1 || die "не найдена команда dpkg-deb"
     command -v tar >/dev/null 2>&1 || die "не найдена команда tar"
+    command -v gzip >/dev/null 2>&1 || die "не найдена команда gzip для упаковки man-страниц"
     if [[ "${MODE}" == 3 && -n "${DATA_ROOT}" ]]; then
         MOVE_AFTER_RESTORE=yes
     fi
@@ -998,6 +1013,25 @@ EOF
     chmod 0644 "${control_file}"
 }
 
+install_manual_pages() {
+    local page language source_dir target_dir
+    local -a pages=(create-claster.sh.1 create-claster-backup.sh.1 create-deb.sh.1)
+    for language in en ru; do
+        source_dir="${SCRIPT_DIR}/man/${language}/man1"
+        if [[ "${language}" == en ]]; then
+            target_dir="${BUILD_ROOT}/usr/share/man/man1"
+        else
+            target_dir="${BUILD_ROOT}/usr/share/man/ru/man1"
+        fi
+        mkdir -p -- "${target_dir}"
+        for page in "${pages[@]}"; do
+            [[ -f "${source_dir}/${page}" ]] || die "не найдена man-страница ${source_dir}/${page}"
+            gzip -9n -c -- "${source_dir}/${page}" >"${target_dir}/${page}.gz"
+            chmod 0644 "${target_dir}/${page}.gz"
+        done
+    done
+}
+
 build_package() {
     local package_base output_file payload_dir dependencies installed_size description
     local -a build_command=(dpkg-deb --build)
@@ -1009,8 +1043,8 @@ build_package() {
         die "файл уже существует: ${output_file}; используйте --force для замены"
     fi
 
-    BUILD_ROOT="$(mktemp -d "${TMP_DIR}/create-deb.XXXXXX")"
-    cp -a -- "${ROOTFS_SKELETON}/." "${BUILD_ROOT}/"
+    BUILD_WORK_DIR="$(mktemp -d "${TMP_DIR}/create-deb.XXXXXX")"
+    BUILD_ROOT="${BUILD_WORK_DIR}/rootFs"
     payload_dir="${BUILD_ROOT}${INSTALL_DIR}"
     mkdir -p -- "${payload_dir}" "${BUILD_ROOT}/usr/local/bin" "${BUILD_ROOT}/DEBIAN"
     chmod 0755 "${BUILD_ROOT}/DEBIAN"
@@ -1018,21 +1052,24 @@ build_package() {
     install -m 0600 -- "${CONFIG_FILE}" "${payload_dir}/.new-claster.config"
     install -m 0644 -- "${SCRIPT_DIR}/CHANGELOG.md" "${payload_dir}/CHANGELOG.md"
     install -m 0755 -- "${SCRIPT_DIR}/create-claster.sh" "${payload_dir}/create-claster.sh"
+    install -m 0755 -- "${SCRIPT_DIR}/create-claster-backup.sh" "${payload_dir}/create-claster-backup.sh"
     install -m 0644 -- "${SCRIPT_DIR}/README.md" "${payload_dir}/README.md"
     install -m 0644 -- "${SCRIPT_DIR}/TEST.md" "${payload_dir}/TEST.md"
     ln -s -- "${INSTALL_DIR}/create-claster.sh" "${BUILD_ROOT}${COMMAND_LINK}"
+    ln -s -- "${INSTALL_DIR}/create-claster-backup.sh" "${BUILD_ROOT}${BACKUP_COMMAND_LINK}"
     printf '%s\n' "${INSTALL_DIR}/.new-claster.config" >"${BUILD_ROOT}/DEBIAN/conffiles"
 
     case "${MODE}" in
-        1) description="Installs create-claster.sh, its configuration and documentation." ;;
-        2) description="Installs the utility and creates PostgreSQL cluster ${pg_ver}/${cls_nm}." ;;
-        3) description="Installs the utility and restores PostgreSQL cluster ${pg_ver}/${cls_nm} from a cold backup." ;;
-        4) description="Installs the utility, creates cluster ${pg_ver}/${cls_nm} and restores database ${DATABASE_NAME}." ;;
+        1) description="Installs PostgreSQL cluster management and scheduled-backup scripts, configuration and documentation." ;;
+        2) description="Installs the scripts and creates PostgreSQL cluster ${pg_ver}/${cls_nm}." ;;
+        3) description="Installs the scripts and restores PostgreSQL cluster ${pg_ver}/${cls_nm} from a cold backup." ;;
+        4) description="Installs the scripts, creates cluster ${pg_ver}/${cls_nm} and restores database ${DATABASE_NAME}." ;;
     esac
     if [[ "${MODE}" != 1 ]]; then
         create_install_plan "${package_base}" "${payload_dir}"
         create_postinst "${BUILD_ROOT}/DEBIAN/postinst"
     fi
+    install_manual_pages
     find "${BUILD_ROOT}" -type d -exec chmod 0755 {} +
     dependencies="$(dependency_list)"
     installed_size="$(du -sk -- "${BUILD_ROOT}" | awk '{print $1}')"
