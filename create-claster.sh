@@ -2,7 +2,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
@@ -12,11 +12,13 @@ declare SELECTED_PACKAGE=""
 declare PG_HOME=""
 declare PG_EXT=""
 declare DATA_BASE=""
+declare DEFAULT_DATA_BASE=""
 declare CLEANUP_DIR=""
 declare SELECTED_CLUSTER_ROW=""
 declare NON_INTERACTIVE=0
 declare ACTION=""
 declare REQUESTED_PACKAGE=""
+declare INSTALL_DATA_ROOT=""
 declare BACKUP_FILE=""
 declare BACKUP_TYPE="cold"
 declare DATABASE_NAME=""
@@ -39,6 +41,8 @@ declare RESTORE_ADMIN_ROLE=""
 declare DATA_DIRECTORY_SIZE_BYTES=""
 declare DATA_DIRECTORY_SIZE_PRETTY=""
 declare DATA_DIRECTORY_DU_SH=""
+declare PRESERVE_NEXT_CLEAR=0
+declare STARTUP_PREPARATION=0
 declare -a CLUSTER_DATABASES=()
 declare -a CLUSTER_DATABASE_SIZE_BYTES=()
 declare -a CLUSTER_DATABASE_SIZES=()
@@ -52,6 +56,7 @@ declare ARG_CLUSTER_PORT=""
 declare ARG_SCHEMA=""
 declare ARG_DB_USER=""
 declare ARG_DB_PASSWORD=""
+declare ARG_DATA_ROOT=""
 declare ARG_BACKUP_DIR=""
 declare ARG_BACKUP_FILE=""
 declare ARG_BACKUP_TYPE=""
@@ -75,22 +80,23 @@ usage() {
 Общие ключи:
   -h, --help                         Показать эту справку и выйти
   -v, --version                      Показать версию сценария и выйти
-  -a, --action ДЕЙСТВИЕ              info|install|backup|restore|delete
+  -a, --action ДЕЙСТВИЕ              info|install|port|move-data|backup|restore|delete
       --package ПАКЕТ                Точный серверный пакет PostgreSQL
       --pg-family СЕМЕЙСТВО          postgresql|postgrespro-ent|tantor-free
       --pg-version ВЕРСИЯ            Версия PostgreSQL, например 16
       --cluster-name ИМЯ             Имя создаваемого или целевого кластера
-      --port ПОРТ                    Порт создаваемого/восстанавливаемого кластера
+      --port ПОРТ                    Новый порт при install, port или restore
       --schema ИМЯ                   Схема и владелец БД при установке
       --user ИМЯ                     Прикладной пользователь БД при установке
       --password ПАРОЛЬ              Пароль пользователя при установке
+      --data-root КАТАЛОГ            Корень данных для install или move-data
       --backup-dir КАТАЛОГ           Каталог резервных копий
       --backup-file ФАЙЛ             Архив restore: относительный или полный путь
       --backup-type ТИП              Тип backup: hot|cold или 1|2; по умолчанию cold
       --database ИМЯ                 База для горячего backup/restore
       --backup-before-delete ДА|НЕТ  Создать бэкап перед delete; по умолчанию да
       --clear-wal ДА|НЕТ              Выполнить pg_resetwal перед бэкапом; по умолчанию нет
-      --overwrite ДА|НЕТ              Разрешить restore поверх кластера; по умолчанию нет
+      --overwrite ДА|НЕТ              Очистить существующую БД при горячем restore
 
 Для backup и delete поддерживается форма pg_ctlcluster: два позиционных
 аргумента ВЕРСИЯ КЛАСТЕР после действия, например: backup 16 subsys.
@@ -100,7 +106,7 @@ usage() {
 Переменные окружения:
   PGCC_ACTION, PGCC_PACKAGE, PGCC_PG_FAMILY, PGCC_PG_VERSION,
   PGCC_CLUSTER_NAME, PGCC_CLUSTER_PORT, PGCC_SCHEMA, PGCC_DB_USER,
-  PGCC_DB_PASSWORD, PGCC_BACKUP_DIR, PGCC_BACKUP_FILE,
+  PGCC_DB_PASSWORD, PGCC_DATA_ROOT, PGCC_BACKUP_DIR, PGCC_BACKUP_FILE,
   PGCC_BACKUP_TYPE, PGCC_DATABASE,
   PGCC_BACKUP_BEFORE_DELETE, PGCC_CLEAR_WAL, PGCC_OVERWRITE.
 
@@ -110,7 +116,9 @@ usage() {
   ${SCRIPT_NAME} --action info
   ${SCRIPT_NAME} --action install --package postgrespro-ent-16-server \\
     --cluster-name subsys --port 5432 --schema subsys --user subsys \\
-    --password 'change-me'
+    --password 'change-me' --data-root /DATA
+  ${SCRIPT_NAME} --action port --pg-version 16 --cluster-name subsys --port 5433
+  ${SCRIPT_NAME} --action move-data --pg-version 16 --cluster-name subsys --data-root /DATA
   PGCC_ACTION=install PGCC_PACKAGE=postgrespro-ent-16-server \\
     PGCC_CLUSTER_NAME=subsys PGCC_CLUSTER_PORT=5432 \\
     PGCC_SCHEMA=subsys PGCC_DB_USER=subsys PGCC_DB_PASSWORD='change-me' \\
@@ -162,6 +170,8 @@ parse_args() {
             --user=*) ARG_DB_USER="${1#*=}"; shift ;;
             --password) option_value_required "$@"; ARG_DB_PASSWORD="$2"; shift 2 ;;
             --password=*) ARG_DB_PASSWORD="${1#*=}"; shift ;;
+            --data-root) option_value_required "$@"; ARG_DATA_ROOT="$2"; shift 2 ;;
+            --data-root=*) ARG_DATA_ROOT="${1#*=}"; shift ;;
             --backup-dir) option_value_required "$@"; ARG_BACKUP_DIR="$2"; shift 2 ;;
             --backup-dir=*) ARG_BACKUP_DIR="${1#*=}"; shift ;;
             --backup-file) option_value_required "$@"; ARG_BACKUP_FILE="$2"; shift 2 ;;
@@ -194,6 +204,7 @@ normalize_yes_no() {
 apply_runtime_options() {
     ACTION="${ARG_ACTION:-${PGCC_ACTION:-}}"
     REQUESTED_PACKAGE="${ARG_PACKAGE:-${PGCC_PACKAGE:-}}"
+    INSTALL_DATA_ROOT="${ARG_DATA_ROOT:-${PGCC_DATA_ROOT:-}}"
     BACKUP_FILE="${ARG_BACKUP_FILE:-${PGCC_BACKUP_FILE:-}}"
     DATABASE_NAME="${ARG_DATABASE_NAME:-${PGCC_DATABASE:-}}"
     [[ -n "${DATABASE_NAME}" ]] && TARGET_DATABASE_SET=1
@@ -228,8 +239,10 @@ apply_runtime_options() {
 
     if [[ -n "${ACTION}" ]]; then
         case "${ACTION,,}" in
-            info|install|backup|restore|delete) ACTION="${ACTION,,}" ;;
-            *) die "неподдерживаемое действие ${ACTION}; используйте info|install|backup|restore|delete" ;;
+            change-port|switch-port) ACTION=port ;;
+            move|relocate-data) ACTION=move-data ;;
+            info|install|port|move-data|backup|restore|delete) ACTION="${ACTION,,}" ;;
+            *) die "неподдерживаемое действие ${ACTION}; используйте info|install|port|move-data|backup|restore|delete" ;;
         esac
         NON_INTERACTIVE=1
     fi
@@ -272,10 +285,23 @@ die() {
 
 warn() {
     printf 'ПРЕДУПРЕЖДЕНИЕ: %s\n' "$*" >&2
+    ((STARTUP_PREPARATION)) && PRESERVE_NEXT_CLEAR=1
+    return 0
+}
+
+startup_notice() {
+    printf '%s\n' "$*"
+    PRESERVE_NEXT_CLEAR=1
 }
 
 header() {
-    ((NON_INTERACTIVE)) || clear 2>/dev/null || true
+    if ((!NON_INTERACTIVE)); then
+        if ((PRESERVE_NEXT_CLEAR)); then
+            PRESERVE_NEXT_CLEAR=0
+        else
+            clear 2>/dev/null || true
+        fi
+    fi
     printf '%s, версия %s\n%s\n' "${SCRIPT_NAME}" "${SCRIPT_VERSION}" "${SEPARATOR}"
 }
 
@@ -396,6 +422,7 @@ package_available() {
 install_package() {
     local package="$1" simulation removals
     local -a targets=("${package}")
+    ((NON_INTERACTIVE)) || PRESERVE_NEXT_CLEAR=1
     printf '\nУстановка пакета %s\n%s\n' "${package}" "${SEPARATOR}"
     unmask_vendor_service "${package}"
 
@@ -420,7 +447,6 @@ install_package() {
 
 ensure_postgresql_common() {
     if package_installed postgresql-common; then
-        ((NON_INTERACTIVE)) || printf 'Обязательный пакет postgresql-common уже установлен.\n'
         return
     fi
     package_available postgresql-common || {
@@ -529,6 +555,7 @@ configure_selected_package() {
             DATA_BASE="/var/lib/postgresql/${pg_ver}"
             ;;
     esac
+    DEFAULT_DATA_BASE="${DATA_BASE}"
     [[ -x "${PG_HOME}/bin/postgres" ]] || die "в пакете ${SELECTED_PACKAGE} не найден ${PG_HOME}/bin/postgres"
     save_config
 }
@@ -551,15 +578,15 @@ unmask_vendor_service() {
 }
 
 stop_disable_vendor_service() {
-    local unit
+    local unit output
     unit="$(vendor_service_name "$1")" || return 0
-    if ((NON_INTERACTIVE)); then
-        systemctl stop "${unit}" >/dev/null 2>&1 || die "не удалось остановить службу ${unit}"
-        systemctl disable "${unit}" >/dev/null 2>&1 || die "не удалось отключить автозапуск службы ${unit}"
-    else
-        systemctl stop "${unit}" || die "не удалось остановить службу ${unit}"
-        systemctl disable "${unit}" || die "не удалось отключить автозапуск службы ${unit}"
-        printf 'Штатная служба %s остановлена, её автозапуск отключён.\n' "${unit}"
+    if ! output="$(systemctl stop "${unit}" 2>&1)"; then
+        [[ -n "${output}" ]] && printf '%s\n' "${output}" >&2
+        die "не удалось остановить службу ${unit}"
+    fi
+    if ! output="$(systemctl disable "${unit}" 2>&1)"; then
+        [[ -n "${output}" ]] && printf '%s\n' "${output}" >&2
+        die "не удалось отключить автозапуск службы ${unit}"
     fi
 }
 
@@ -587,7 +614,7 @@ select_or_install_server() {
         fi
         SELECTED_PACKAGE="${package}"
         if server_package_installed "${SELECTED_PACKAGE}"; then
-            ((NON_INTERACTIVE)) || printf 'Серверный пакет %s уже установлен.\n' "${SELECTED_PACKAGE}"
+            :
         else
             if ! package_available "${SELECTED_PACKAGE}"; then
                 printf 'Обновление сведений о репозиториях...\n'
@@ -612,10 +639,8 @@ select_or_install_server() {
     done
     if [[ -n "${preferred}" ]]; then
         SELECTED_PACKAGE="${preferred}"
-        printf 'Серверный пакет %s уже установлен.\n' "${SELECTED_PACKAGE}"
     elif ((${#installed[@]} == 1)); then
         SELECTED_PACKAGE="${installed[0]}"
-        printf 'Найден установленный серверный пакет %s.\n' "${SELECTED_PACKAGE}"
     elif ((${#installed[@]} > 1)); then
         choose_from_packages "Установлено несколько серверных пакетов:" "${installed[@]}"
     else
@@ -651,7 +676,8 @@ prepare_postgres_root() {
     ensure_symlink "/etc/postgresql/${pg_ver}" /.postgres/etc
     if [[ -d /.postgres/data && ! -L /.postgres/data ]]; then
         if [[ -L "${DATA_BASE}" && "$(readlink -f "${DATA_BASE}")" == "$(readlink -f /.postgres/data)" ]]; then
-            ((NON_INTERACTIVE)) || printf 'Каталог данных используется через ссылку %s -> /.postgres/data.\n' "${DATA_BASE}"
+            ((NON_INTERACTIVE)) || startup_notice \
+                "Каталог данных используется через ссылку ${DATA_BASE} -> /.postgres/data."
         elif [[ ! -e "${DATA_BASE}" && ! -L "${DATA_BASE}" ]]; then
             ensure_symlink /.postgres/data "${DATA_BASE}"
         else
@@ -692,6 +718,21 @@ prepare_backup_directory() {
 
 cluster_rows() {
     pg_lsclusters --no-header 2>/dev/null || true
+}
+
+print_cluster_row() {
+    local prefix="$1" row="$2" version name port status remainder color
+    read -r version name port status remainder <<<"${row}"
+    if [[ -t 1 ]]; then
+        if [[ "${status}" == online* ]]; then
+            color=32
+        else
+            color=31
+        fi
+        printf '%s\033[%sm%s\033[0m\n' "${prefix}" "${color}" "${row}"
+    else
+        printf '%s%s\n' "${prefix}" "${row}"
+    fi
 }
 
 cluster_exists() {
@@ -778,6 +819,19 @@ port_in_use_by_other_cluster() {
         '$3 == p && !($1 == v && $2 == n) {found=1} END {exit !found}'
 }
 
+tcp_port_listening() {
+    local port="$1"
+    command -v ss >/dev/null 2>&1 || return 1
+    ss -H -ltn 2>/dev/null | awk -v p="${port}" '
+        {
+            address=$4
+            sub(/^.*:/, "", address)
+            if (address == p) found=1
+        }
+        END {exit !found}
+    '
+}
+
 print_clusters_numbered() {
     local -a rows=()
     mapfile -t rows < <(cluster_rows)
@@ -787,12 +841,36 @@ print_clusters_numbered() {
     fi
     local i
     for i in "${!rows[@]}"; do
-        printf '%3d - %s\n' "$((i + 1))" "${rows[i]}"
+        print_cluster_row "$(printf '%3d - ' "$((i + 1))")" "${rows[i]}"
     done
 }
 
 validate_identifier() {
     [[ "$1" =~ ^[a-z_][a-z0-9_]*$ ]]
+}
+
+normalize_data_root() {
+    local root="$1"
+    [[ "${root}" == /* ]] || return 1
+    [[ "${root}" != *[$'\t\r\n ']* ]] || return 1
+    realpath -ms -- "${root}"
+}
+
+install_data_base_from_root() {
+    local root version="${2:-${pg_ver}}"
+    root="$(normalize_data_root "$1")" || return 1
+    if [[ "${root}" == / ]]; then
+        printf '/pg_%s' "${version}"
+    else
+        printf '%s/pg_%s' "${root}" "${version}"
+    fi
+}
+
+data_directory_available() {
+    local directory="$1"
+    [[ ! -e "${directory}" && ! -L "${directory}" ]] && return 0
+    [[ -d "${directory}" ]] || return 1
+    [[ -z "$(find "${directory}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]
 }
 
 prompt_value() {
@@ -804,6 +882,7 @@ prompt_value() {
 prompt_cluster_settings() {
     local old_name="${cls_nm}" new_port="${cls_pt}" new_name="${cls_nm}"
     local new_schema="${cls_ch}" new_user="${cls_us}" new_password="${cls_pw}" value
+    local new_data_base="${DEFAULT_DATA_BASE}" data_choice data_root data_dir
     while true; do
         value="$(prompt_value "Порт" "${new_port}")" || return 1
         [[ "${value}" =~ ^[0-9]+$ ]] && ((value >= 1 && value <= 65535)) || {
@@ -850,8 +929,40 @@ prompt_cluster_settings() {
         break
     done
 
-    printf '\nПараметры:\n  пакет: %s\n  версия: %s\n  порт: %s\n  кластер: %s\n  схема/владелец: %s\n  пользователь: %s\n' \
-        "${SELECTED_PACKAGE}" "${pg_ver}" "${new_port}" "${new_name}" "${new_schema}" "${new_user}"
+    while true; do
+        printf '\nРасположение каталога данных:\n'
+        printf '1 - Системный путь: %s/%s\n' "${DEFAULT_DATA_BASE}" "${new_name}"
+        printf '2 - Указать другой корневой путь\n'
+        printf '0 - Отменить установку\n'
+        read -r -p "Выбор [1]: " data_choice || return 1
+        data_choice="${data_choice:-1}"
+        case "${data_choice}" in
+            0) return 1 ;;
+            1)
+                new_data_base="${DEFAULT_DATA_BASE}"
+                ;;
+            2)
+                read -r -p "Путь размещения данных (например /DATA): " data_root || return 1
+                if ! new_data_base="$(install_data_base_from_root "${data_root}")"; then
+                    warn "укажите абсолютный путь без пробельных символов"
+                    continue
+                fi
+                ;;
+            *)
+                warn "выберите 0, 1 или 2"
+                continue
+                ;;
+        esac
+        data_dir="${new_data_base}/${new_name}"
+        if ! data_directory_available "${data_dir}"; then
+            warn "каталог ${data_dir} уже существует и не пуст либо не является каталогом"
+            continue
+        fi
+        break
+    done
+
+    printf '\nПараметры:\n  пакет: %s\n  версия: %s\n  порт: %s\n  кластер: %s\n  каталог данных: %s\n  схема/владелец: %s\n  пользователь: %s\n' \
+        "${SELECTED_PACKAGE}" "${pg_ver}" "${new_port}" "${new_name}" "${data_dir}" "${new_schema}" "${new_user}"
     confirm "Создать кластер с этими параметрами?" Y || return 1
 
     cls_pt="${new_port}"
@@ -859,22 +970,59 @@ prompt_cluster_settings() {
     cls_ch="${new_schema}"
     cls_us="${new_user}"
     cls_pw="${new_password}"
+    DATA_BASE="${new_data_base}"
 }
 
 systemd_unit_dir() {
     [[ -d /usr/lib/systemd/system ]] && printf '/usr/lib/systemd/system' || printf '/lib/systemd/system'
 }
 
-write_cluster_unit() {
-    local unit_dir service data_dir
-    unit_dir="$(systemd_unit_dir)"
-    service="postgresql@${pg_ver}-${cls_nm}.service"
-    data_dir="${DATA_BASE}/${cls_nm}"
-    cat >"${unit_dir}/${service}" <<EOF
+cluster_service_file() {
+    local version="$1" name="$2" service candidate
+    service="postgresql@${version}-${name}.service"
+    for candidate in \
+        "/etc/systemd/system/${service}" \
+        "/usr/lib/systemd/system/${service}" \
+        "/lib/systemd/system/${service}" \
+        "/.postgres/systemd/save/${service}"; do
+        if [[ -f "${candidate}" ]]; then
+            printf '%s' "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+restore_target_conflict() {
+    local version="$1" name="$2" data_dir="$3" service candidate
+    service="postgresql@${version}-${name}.service"
+    if cluster_exists "${version}" "${name}"; then
+        printf 'кластер %s/%s уже зарегистрирован' "${version}" "${name}"
+        return 0
+    fi
+    for candidate in \
+        "/etc/postgresql/${version}/${name}" \
+        "${data_dir}" \
+        "/etc/systemd/system/${service}" \
+        "/usr/lib/systemd/system/${service}" \
+        "/lib/systemd/system/${service}" \
+        "/.postgres/systemd/${service}" \
+        "/.postgres/systemd/save/${service}"; do
+        if [[ -e "${candidate}" || -L "${candidate}" ]]; then
+            printf 'целевой путь уже существует: %s' "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+write_cluster_unit_file() {
+    local unit_file="$1" version="$2" name="$3" data_dir="$4"
+    cat >"${unit_file}" <<EOF
 [Unit]
-Description=PostgreSQL Cluster ${pg_ver}-${cls_nm}
-AssertPathExists=/etc/postgresql/${pg_ver}/${cls_nm}/postgresql.conf
-RequiresMountsFor=/etc/postgresql/${pg_ver}/${cls_nm} ${data_dir}
+Description=PostgreSQL Cluster ${version}-${name}
+AssertPathExists=/etc/postgresql/${version}/${name}/postgresql.conf
+RequiresMountsFor=/etc/postgresql/${version}/${name} ${data_dir}
 PartOf=postgresql.service
 ReloadPropagatedFrom=postgresql.service
 Before=postgresql.service
@@ -882,18 +1030,26 @@ After=network.target
 
 [Service]
 Type=forking
-ExecStart=-/usr/bin/pg_ctlcluster --skip-systemctl-redirect ${pg_ver}-${cls_nm} start
+ExecStart=-/usr/bin/pg_ctlcluster --skip-systemctl-redirect ${version}-${name} start
 TimeoutStartSec=0
-ExecStop=/usr/bin/pg_ctlcluster --skip-systemctl-redirect -m fast ${pg_ver}-${cls_nm} stop
+ExecStop=/usr/bin/pg_ctlcluster --skip-systemctl-redirect -m fast ${version}-${name} stop
 TimeoutStopSec=1h
-ExecReload=/usr/bin/pg_ctlcluster --skip-systemctl-redirect ${pg_ver}-${cls_nm} reload
-PIDFile=/run/postgresql/${pg_ver}-${cls_nm}.pid
-SyslogIdentifier=postgresql@${pg_ver}-${cls_nm}
+ExecReload=/usr/bin/pg_ctlcluster --skip-systemctl-redirect ${version}-${name} reload
+PIDFile=/run/postgresql/${version}-${name}.pid
+SyslogIdentifier=postgresql@${version}-${name}
 OOMScoreAdjust=-900
 
 [Install]
 WantedBy=multi-user.target
 EOF
+}
+
+write_cluster_unit() {
+    local unit_dir service data_dir
+    unit_dir="$(systemd_unit_dir)"
+    service="postgresql@${pg_ver}-${cls_nm}.service"
+    data_dir="${DATA_BASE}/${cls_nm}"
+    write_cluster_unit_file "${unit_dir}/${service}" "${pg_ver}" "${cls_nm}" "${data_dir}"
     cp -f -- "${unit_dir}/${service}" "/.postgres/systemd/save/${service}"
     ensure_symlink "${unit_dir}/${service}" "/.postgres/systemd/${service}"
     systemctl daemon-reload
@@ -990,6 +1146,10 @@ install_menu() {
     step "Кластер: Установить"
     print_clusters_numbered || true
     if ((NON_INTERACTIVE)); then
+        if [[ -n "${INSTALL_DATA_ROOT}" ]]; then
+            DATA_BASE="$(install_data_base_from_root "${INSTALL_DATA_ROOT}")" || \
+                die "--data-root должен содержать абсолютный путь без пробельных символов"
+        fi
         [[ "${cls_pt}" =~ ^[0-9]+$ ]] && ((cls_pt >= 1 && cls_pt <= 65535)) || \
             die "порт должен быть числом от 1 до 65535"
         validate_identifier "${cls_nm}" || die "недопустимое имя кластера: ${cls_nm}"
@@ -998,8 +1158,10 @@ install_menu() {
         [[ -n "${cls_pw}" ]] || die "пароль пользователя не может быть пустым"
         cluster_exists "${pg_ver}" "${cls_nm}" && die "кластер ${pg_ver}/${cls_nm} уже развёрнут"
         port_in_use "${cls_pt}" && die "порт ${cls_pt} уже назначен развёрнутому кластеру"
-        printf '\nПараметры:\n  пакет: %s\n  версия: %s\n  порт: %s\n  кластер: %s\n  схема/владелец: %s\n  пользователь: %s\n' \
-            "${SELECTED_PACKAGE}" "${pg_ver}" "${cls_pt}" "${cls_nm}" "${cls_ch}" "${cls_us}"
+        data_directory_available "${DATA_BASE}/${cls_nm}" || \
+            die "каталог ${DATA_BASE}/${cls_nm} уже существует и не пуст либо не является каталогом"
+        printf '\nПараметры:\n  пакет: %s\n  версия: %s\n  порт: %s\n  кластер: %s\n  каталог данных: %s\n  схема/владелец: %s\n  пользователь: %s\n' \
+            "${SELECTED_PACKAGE}" "${pg_ver}" "${cls_pt}" "${cls_nm}" "${DATA_BASE}/${cls_nm}" "${cls_ch}" "${cls_us}"
         create_cluster || die "ошибка установки кластера"
         return 0
     fi
@@ -1009,6 +1171,240 @@ install_menu() {
     else
         warn "установка отменена"
     fi
+    pause
+}
+
+set_cluster_port() {
+    local version="$1" name="$2" data="$3" new_port="$4"
+    local conf_dir file configured_port
+    conf_dir="/etc/postgresql/${version}/${name}"
+    [[ -f "${conf_dir}/postgresql.conf" ]] || die \
+        "не найден файл настроек ${conf_dir}/postgresql.conf"
+    command -v pg_conftool >/dev/null 2>&1 || die "не найдена команда pg_conftool"
+
+    pg_conftool "${version}" "${name}" set port "${new_port}" || die \
+        "не удалось изменить порт в postgresql.conf кластера ${version}/${name}"
+    if [[ -d "${conf_dir}/conf.d" ]]; then
+        while IFS= read -r -d '' file; do
+            set_postgresql_setting "${file}" port "${new_port}"
+        done < <(find "${conf_dir}/conf.d" -type f -name '*.conf' -print0)
+    fi
+    set_postgresql_setting "${data}/postgresql.auto.conf" port "${new_port}"
+
+    configured_port="$(pg_conftool -s "${version}" "${name}" show port 2>/dev/null || true)"
+    [[ "${configured_port}" == "${new_port}" ]] || die \
+        "проверка настроек вернула порт ${configured_port:-не определён} вместо ${new_port}"
+}
+
+change_port_menu() {
+    local row version name old_port status owner data log new_port was_online=no
+    header
+    step "Кластер: Переключить порт"
+    if ! cluster_rows | grep -q .; then
+        warn "развёрнутых кластеров нет"
+        pause
+        return 0
+    fi
+    select_cluster "Выберите кластер" || return 0
+    row="${SELECTED_CLUSTER_ROW}"
+    read -r version name old_port status owner data log <<<"${row}"
+
+    if ((NON_INTERACTIVE)); then
+        ((TARGET_PORT_SET)) || die \
+            "для действия port укажите --port или PGCC_CLUSTER_PORT"
+        new_port="${cls_pt}"
+    else
+        while true; do
+            new_port="$(prompt_value "Новый TCP-порт" "${old_port}")" || return 0
+            [[ "${new_port}" =~ ^[0-9]+$ ]] && ((new_port >= 1 && new_port <= 65535)) || {
+                warn "порт должен быть числом от 1 до 65535"
+                continue
+            }
+            [[ "${new_port}" != "${old_port}" ]] || {
+                warn "порт ${new_port} уже используется выбранным кластером"
+                continue
+            }
+            if port_in_use_by_other_cluster "${new_port}" "${version}" "${name}"; then
+                warn "порт ${new_port} уже назначен другому кластеру"
+                continue
+            fi
+            if tcp_port_listening "${new_port}"; then
+                warn "TCP-порт ${new_port} уже занят другим процессом"
+                continue
+            fi
+            break
+        done
+        printf '\nКластер %s/%s: порт %s -> %s.\n' \
+            "${version}" "${name}" "${old_port}" "${new_port}"
+        confirm "Переключить порт выбранного кластера?" Y || return 0
+    fi
+
+    [[ "${new_port}" =~ ^[0-9]+$ ]] && ((new_port >= 1 && new_port <= 65535)) || \
+        die "порт должен быть числом от 1 до 65535"
+    [[ "${new_port}" != "${old_port}" ]] || die \
+        "порт ${new_port} уже используется кластером ${version}/${name}"
+    port_in_use_by_other_cluster "${new_port}" "${version}" "${name}" && die \
+        "порт ${new_port} уже назначен другому кластеру"
+    tcp_port_listening "${new_port}" && die "TCP-порт ${new_port} уже занят другим процессом"
+
+    [[ "${status}" == online* ]] && was_online=yes
+    if [[ "${was_online}" == yes ]]; then
+        printf 'Остановка кластера %s/%s...\n' "${version}" "${name}"
+        stop_cluster_checked "${version}" "${name}"
+    fi
+    set_cluster_port "${version}" "${name}" "${data}" "${new_port}"
+    if [[ "${was_online}" == yes ]]; then
+        printf 'Запуск кластера %s/%s на порту %s...\n' "${version}" "${name}" "${new_port}"
+        start_cluster_checked "${version}" "${name}"
+    fi
+    printf 'Порт кластера %s/%s переключён: %s -> %s. Состояние: %s.\n' \
+        "${version}" "${name}" "${old_port}" "${new_port}" \
+        "$(cluster_online "${version}" "${name}" && printf online || printf down)"
+    pause
+}
+
+default_cluster_data_base() {
+    local version="$1" data="$2" home
+    home="$(cluster_pg_home "${version}" "${data}")"
+    if [[ "${home}" == /opt/tantor/db/* ]]; then
+        printf '/var/lib/postgresql/tantor-free-%s' "${version}"
+    else
+        printf '/var/lib/postgresql/%s' "${version}"
+    fi
+}
+
+validate_cluster_move_destination() {
+    local source="$1" destination="$2" name="$3"
+    local normalized source_real destination_real parent
+    [[ -d "${source}" ]] || return 1
+    [[ ! -L "${source}" ]] || return 1
+    normalized="$(realpath -ms -- "${destination}")" || return 1
+    parent="$(dirname -- "${normalized}")"
+    [[ "${normalized}" == /* && "$(basename -- "${normalized}")" == "${name}" && "${parent}" != / ]] || return 1
+    [[ ! -L "${normalized}" ]] || return 1
+    data_directory_available "${normalized}" || return 1
+    source_real="$(readlink -f -- "${source}")" || return 1
+    destination_real="$(realpath -m -- "${normalized}")" || return 1
+    [[ "${destination_real}" != "${source_real}" && "${destination_real}" != "${source_real}/"* ]] || return 1
+}
+
+update_cluster_data_path() {
+    local version="$1" name="$2" old_data="$3" new_data="$4"
+    local conf_dir service candidate resolved reported_data=""
+    local -a unit_candidates=()
+    conf_dir="/etc/postgresql/${version}/${name}"
+    [[ -d "${conf_dir}" ]] || die "не найден каталог конфигурации ${conf_dir}"
+    while IFS= read -r -d '' candidate; do
+        replace_literal_in_file "${old_data}" "${new_data}" "${candidate}"
+    done < <(find "${conf_dir}" -type f -print0)
+    command -v pg_conftool >/dev/null 2>&1 || die "не найдена команда pg_conftool"
+    pg_conftool "${version}" "${name}" set data_directory "${new_data}" || die \
+        "не удалось записать новый каталог данных в конфигурацию ${version}/${name}"
+    replace_literal_in_file "${old_data}" "${new_data}" "${new_data}/postgresql.auto.conf"
+    replace_literal_in_file "${old_data}" "${new_data}" "${new_data}/postmaster.opts"
+
+    service="postgresql@${version}-${name}.service"
+    unit_candidates=(
+        "/etc/systemd/system/${service}"
+        "/usr/lib/systemd/system/${service}"
+        "/lib/systemd/system/${service}"
+        "/.postgres/systemd/${service}"
+        "/.postgres/systemd/save/${service}"
+    )
+    for candidate in "${unit_candidates[@]}"; do
+        [[ -f "${candidate}" ]] || continue
+        resolved="$(readlink -f -- "${candidate}")" || continue
+        replace_literal_in_file "${old_data}" "${new_data}" "${resolved}"
+    done
+    systemctl daemon-reload
+
+    reported_data="$(cluster_rows | awk -v v="${version}" -v n="${name}" \
+        '$1 == v && $2 == n {print $6; exit}')"
+    [[ -n "${reported_data}" ]] || die \
+        "после переноса кластер ${version}/${name} не найден в pg_lsclusters"
+    [[ "$(realpath -m -- "${reported_data}")" == "$(realpath -m -- "${new_data}")" ]] || die \
+        "pg_lsclusters показывает каталог ${reported_data} вместо ${new_data}"
+}
+
+move_cluster_data_menu() {
+    local row version name port status owner data log default_base target_base target_data
+    local choice target_root was_online=no
+    header
+    step "Кластер: Переместить данные"
+    if ! cluster_rows | grep -q .; then
+        warn "развёрнутых кластеров нет"
+        pause
+        return 0
+    fi
+    select_cluster "Выберите кластер" || return 0
+    row="${SELECTED_CLUSTER_ROW}"
+    read -r version name port status owner data log <<<"${row}"
+    default_base="$(default_cluster_data_base "${version}" "${data}")"
+
+    if ((NON_INTERACTIVE)); then
+        if [[ -n "${INSTALL_DATA_ROOT}" ]]; then
+            target_base="$(install_data_base_from_root "${INSTALL_DATA_ROOT}" "${version}")" || \
+                die "--data-root должен содержать абсолютный путь без пробельных символов"
+        else
+            target_base="${default_base}"
+        fi
+    else
+        while true; do
+            printf '\nНовое расположение каталога данных:\n'
+            printf '1 - Дефолтное размещение: %s/%s\n' "${default_base}" "${name}"
+            printf '2 - Указать другой корневой каталог\n'
+            printf '0 - Вернуться назад\n'
+            read -r -p "Выбор [1]: " choice || return 0
+            choice="${choice:-1}"
+            case "${choice}" in
+                0) return 0 ;;
+                1) target_base="${default_base}" ;;
+                2)
+                    read -r -p "Полный путь корневого каталога (например /DATA): " target_root || return 0
+                    if ! target_base="$(install_data_base_from_root "${target_root}" "${version}")"; then
+                        warn "укажите абсолютный путь без пробельных символов"
+                        continue
+                    fi
+                    ;;
+                *) warn "выберите 0, 1 или 2"; continue ;;
+            esac
+            target_data="${target_base}/${name}"
+            if ! validate_cluster_move_destination "${data}" "${target_data}" "${name}"; then
+                warn "целевой каталог ${target_data} занят, совпадает с текущим либо небезопасен"
+                continue
+            fi
+            break
+        done
+    fi
+
+    target_data="${target_base}/${name}"
+    validate_cluster_move_destination "${data}" "${target_data}" "${name}" || die \
+        "целевой каталог ${target_data} занят, совпадает с текущим либо небезопасен"
+    printf '\nКластер %s/%s:\n  текущий каталог: %s\n  новый каталог:   %s\n' \
+        "${version}" "${name}" "${data}" "${target_data}"
+    if ((!NON_INTERACTIVE)); then
+        confirm "Остановить кластер и переместить данные?" Y || return 0
+    fi
+
+    [[ "${status}" == online* ]] && was_online=yes
+    if [[ "${was_online}" == yes ]]; then
+        printf 'Остановка кластера %s/%s...\n' "${version}" "${name}"
+        stop_cluster_checked "${version}" "${name}"
+    fi
+    mkdir -p -- "${target_base}"
+    if [[ -d "${target_data}" ]]; then
+        rmdir -- "${target_data}" || die "не удалось удалить пустой целевой каталог ${target_data}"
+    fi
+    printf 'Перемещение %s -> %s...\n' "${data}" "${target_data}"
+    mv -- "${data}" "${target_data}" || die "не удалось переместить каталог данных"
+    update_cluster_data_path "${version}" "${name}" "${data}" "${target_data}"
+    if [[ "${was_online}" == yes ]]; then
+        printf 'Запуск кластера %s/%s из нового каталога...\n' "${version}" "${name}"
+        start_cluster_checked "${version}" "${name}"
+    fi
+    printf 'Данные кластера %s/%s перемещены в %s. Состояние: %s.\n' \
+        "${version}" "${name}" "${target_data}" \
+        "$(cluster_online "${version}" "${name}" && printf online || printf down)"
     pause
 }
 
@@ -1025,7 +1421,9 @@ select_cluster() {
         [[ -n "${SELECTED_CLUSTER_ROW}" ]] || die "кластер ${pg_ver}/${cls_nm} не найден"
         return 0
     fi
-    for i in "${!rows[@]}"; do printf '%3d - %s\n' "$((i + 1))" "${rows[i]}"; done
+    for i in "${!rows[@]}"; do
+        print_cluster_row "$(printf '%3d - ' "$((i + 1))")" "${rows[i]}"
+    done
     printf '  0 - Вернуться назад\n'
     read -r -p "${prompt}: " choice || return 1
     [[ "${choice}" =~ ^[0-9]+$ ]] || return 1
@@ -1035,7 +1433,17 @@ select_cluster() {
 }
 
 cluster_pg_home() {
-    local version="$1" data="$2"
+    local version="$1" data="$2" postgres_command="" detected_home=""
+    if [[ -r "${data}/postmaster.opts" ]]; then
+        read -r postgres_command _ <"${data}/postmaster.opts" || true
+        postgres_command="${postgres_command#\"}"
+        postgres_command="${postgres_command%\"}"
+        if [[ "${postgres_command}" == */bin/postgres && -x "${postgres_command}" ]]; then
+            detected_home="${postgres_command%/bin/postgres}"
+            printf '%s' "${detected_home}"
+            return 0
+        fi
+    fi
     if [[ "${data}" == /var/lib/postgresql/tantor-free-* ]]; then
         printf '/opt/tantor/db/%s' "${version}"
     elif [[ -x "/opt/pgpro/ent-${version}/bin/postgres" ]]; then
@@ -1379,15 +1787,14 @@ put_postgresql_setting() {
 make_cold_backup() {
     local version="$1" name="$2" port="$3" status="$4" owner="$5" data="$6" log="$7"
     local restart_after="${8:-no}" was_online=no
-    local home reset_tool unit_dir service archive timestamp meta_tmp rel cluster_package version_text
+    local home reset_tool service_file archive timestamp meta_tmp rel cluster_package version_text
     local socket_dir metadata_started=no
     local -a paths=()
     prepare_backup_directory write
     timestamp="$(date +%Y%m%d-%H%M%S)"
     archive="${backup_dir}/$(backup_archive_name "${version}" "${name}" "${timestamp}")"
     home="$(cluster_pg_home "${version}" "${data}")"
-    unit_dir="$(systemd_unit_dir)"
-    service="postgresql@${version}-${name}.service"
+    service_file="$(cluster_service_file "${version}" "${name}" || true)"
 
     if [[ "${status}" != online* ]]; then
         printf 'Кластер %s/%s временно запускается для записи имён и размеров БД...\n' \
@@ -1429,7 +1836,7 @@ make_cold_backup() {
     [[ -e "/etc/postgresql/${version}/${name}" ]] && paths+=("etc/postgresql/${version}/${name}")
     rel="${data#/}"; [[ -e "${data}" ]] && paths+=("${rel}")
     rel="${log#/}"; [[ -e "${log}" ]] && paths+=("${rel}")
-    [[ -e "${unit_dir}/${service}" ]] && paths+=("${unit_dir#/}/${service}")
+    [[ -n "${service_file}" ]] && paths+=("${service_file#/}")
     ((${#paths[@]})) || die "нечего помещать в резервную копию"
 
     if [[ "${data}" == /var/lib/postgresql/tantor-free-* ]]; then
@@ -1452,7 +1859,7 @@ make_cold_backup() {
         printf 'data_directory_size_pretty=%q\n' "${DATA_DIRECTORY_SIZE_PRETTY}"
         printf 'data_directory_du_sh=%q\n' "${DATA_DIRECTORY_DU_SH}"
         printf 'log_file=%q\n' "${log}"
-        printf 'service_file=%q\n' "${unit_dir}/${service}"
+        printf 'service_file=%q\n' "${service_file}"
         write_database_inventory_metadata
     } >"${meta_tmp}/backup-info.env"
     tar --dereference -czf "${archive}" --transform='s,^,root/,' -C / "${paths[@]}" \
@@ -1583,10 +1990,52 @@ backup_menu() {
     pause
 }
 
-delete_menu() {
-    local row version name port status owner data log unit_dir service
+remove_cluster_directory_exact() {
+    local path="$1" name="$2" label="$3" expected_path="${4:-}"
+    local normalized parent
+    normalized="$(realpath -ms -- "${path}")" || die "не удалось нормализовать путь ${path}"
+    parent="$(dirname -- "${normalized}")"
+    [[ "${normalized}" == /* && "$(basename -- "${normalized}")" == "${name}" && "${parent}" != / ]] || \
+        die "отказ от небезопасного удаления ${label}: ${normalized}"
+    if [[ -n "${expected_path}" && "${normalized}" != "${expected_path}" ]]; then
+        die "неожиданный путь ${label}: ${normalized}, ожидался ${expected_path}"
+    fi
+
+    if [[ -L "${normalized}" ]]; then
+        rm -f -- "${normalized}" || die "не удалось удалить симлинк ${normalized}"
+        printf '%s удалён: %s (симлинк, целевой каталог не затронут).\n' "${label}" "${normalized}"
+    elif [[ -d "${normalized}" ]]; then
+        rm -rf --one-file-system -- "${normalized}" || die "не удалось удалить ${label} ${normalized}"
+        printf '%s удалён: %s.\n' "${label}" "${normalized}"
+    elif [[ -e "${normalized}" ]]; then
+        die "${label} ${normalized} существует, но не является каталогом"
+    else
+        printf '%s уже удалён штатной утилитой: %s.\n' "${label}" "${normalized}"
+    fi
+    [[ ! -e "${normalized}" && ! -L "${normalized}" ]] || die \
+        "после очистки сохранился ${label} ${normalized}"
+}
+
+remove_cluster_service_files() {
+    local version="$1" name="$2" service candidate
+    service="postgresql@${version}-${name}.service"
+    systemctl disable "${service}" >/dev/null 2>&1 || true
+    for candidate in \
+        "/etc/systemd/system/${service}" \
+        "/etc/systemd/system/multi-user.target.wants/${service}" \
+        "/usr/lib/systemd/system/${service}" \
+        "/lib/systemd/system/${service}" \
+        "/.postgres/systemd/${service}" \
+        "/.postgres/systemd/save/${service}"; do
+        rm -f -- "${candidate}"
+    done
+    systemctl daemon-reload
+}
+
+delete_cluster_menu() {
+    local row version name port status owner data log conf_dir
     header
-    step "Удаление: Выбор цели для удаления"
+    step "Удаление: Выбор кластера"
     select_cluster "Выберите кластер" || return 0
     row="${SELECTED_CLUSTER_ROW}"
     read -r version name port status owner data log <<<"${row}"
@@ -1605,13 +2054,102 @@ delete_menu() {
     printf 'Удаляется только журнал выбранного кластера: %s\n' "${log}"
     printf 'Каталог /var/log/postgresql и журналы других кластеров сохраняются.\n'
     run_parsec_aware pg_dropcluster --stop "${version}" "${name}"
-    unit_dir="$(systemd_unit_dir)"
-    service="postgresql@${version}-${name}.service"
-    systemctl disable "${service}" >/dev/null 2>&1 || true
-    rm -f -- "${unit_dir}/${service}" "/.postgres/systemd/${service}" "/.postgres/systemd/save/${service}"
-    systemctl daemon-reload
+    conf_dir="/etc/postgresql/${version}/${name}"
+    remove_cluster_directory_exact "${conf_dir}" "${name}" "Каталог конфигурации" "${conf_dir}"
+    remove_cluster_directory_exact "${data}" "${name}" "Каталог данных"
+    remove_cluster_service_files "${version}" "${name}"
     printf 'Кластер %s/%s удалён.\n' "${version}" "${name}"
     pause
+}
+
+drop_database_checked() {
+    local version="$1" cluster="$2" port="$3" status="$4" data="$5" database="$6"
+    local home socket_dir
+    [[ "${status}" == online* ]] || die \
+        "для удаления БД кластер ${version}/${cluster} должен быть запущен"
+    validate_database_name "${database}" || die "недопустимое имя базы данных: ${database}"
+    [[ "${database}" != postgres ]] || die "удаление служебной базы postgres запрещено"
+    home="$(cluster_pg_home "${version}" "${data}")"
+    [[ -x "${home}/bin/dropdb" ]] || die "не найден ${home}/bin/dropdb"
+    socket_dir="$(cluster_socket_directory "${port}")" || die \
+        "не найден Unix-сокет кластера ${version}/${cluster} на порту ${port}"
+    runuser -u postgres -- "${home}/bin/dropdb" --force \
+        --host="${socket_dir}" --port="${port}" --username=postgres -- "${database}" || die \
+        "не удалось удалить базу данных ${database} из кластера ${version}/${cluster}"
+}
+
+delete_database_menu() {
+    local row version name port status owner data log home socket_dir database default_database
+    header
+    step "Удаление: Выбор базы данных"
+    select_cluster "Выберите кластер" || return 0
+    row="${SELECTED_CLUSTER_ROW}"
+    read -r version name port status owner data log <<<"${row}"
+    printf '\nВыбран кластер %s/%s, данные: %s\n' "${version}" "${name}" "${data}"
+    if [[ "${status}" != online* ]]; then
+        warn "для удаления БД кластер ${version}/${name} должен быть запущен"
+        pause
+        return 0
+    fi
+    home="$(cluster_pg_home "${version}" "${data}")"
+    socket_dir="$(cluster_socket_directory "${port}")" || {
+        warn "не найден Unix-сокет кластера ${version}/${name} на порту ${port}"
+        pause
+        return 0
+    }
+    if ! print_cluster_databases "${home}" "${socket_dir}" "${port}" "${version}" "${name}"; then
+        warn "не удалось получить список БД кластера ${version}/${name}"
+        pause
+        return 0
+    fi
+    ((${#CLUSTER_DATABASES[@]})) || {
+        warn "в кластере нет доступных баз данных"
+        pause
+        return 0
+    }
+    printf 'Служебная база postgres отображается в списке, но её удаление запрещено.\n'
+    default_database=1
+    if ! default_database="$(database_number_in_loaded_list "${name}")"; then
+        default_database=1
+    fi
+    select_existing_database "Выберите удаляемую БД (номер из списка или точное имя)" \
+        "${default_database}" || return 0
+    database="${SELECTED_DATABASE}"
+    if [[ "${database}" == postgres ]]; then
+        warn "удаление служебной базы postgres запрещено"
+        pause
+        return 0
+    fi
+    confirm "Удалить базу ${database} из кластера ${version}/${name}? Все данные БД будут потеряны" N || {
+        warn "удаление базы данных отменено"
+        pause
+        return 0
+    }
+    drop_database_checked "${version}" "${name}" "${port}" "${status}" "${data}" "${database}"
+    printf 'База данных %s удалена из кластера %s/%s.\n' \
+        "${database}" "${version}" "${name}"
+    pause
+}
+
+delete_menu() {
+    local choice
+    if ((NON_INTERACTIVE)); then
+        delete_cluster_menu
+        return 0
+    fi
+    header
+    step "Удаление: Выбор режима"
+    printf '%s\n' \
+        '1 - Кластер: Удалить' \
+        '2 - База данных: Удалить' \
+        '0 - Вернуться назад'
+    read -r -p "Что удалить: " choice || return 0
+    case "${choice}" in
+        1) delete_cluster_menu ;;
+        2) delete_database_menu ;;
+        0) return 0 ;;
+        *) warn "неверный режим удаления"; pause ;;
+    esac
 }
 
 restore_hot_backup() {
@@ -1720,10 +2258,10 @@ restore_hot_backup() {
 }
 
 restore_menu() {
-    local choice archive stage info service_file version name package entry
+    local choice archive stage info service_file version name package entry unit_dir candidate
     local cluster_name cluster_port pg_version data_dir log_file
     local original_name original_port original_data_dir original_conf_dir
-    local restore_name restore_port restore_data_dir restore_conf_dir restore_service_file file
+    local restore_name restore_port restore_data_dir restore_conf_dir restore_service_file file conflict
     local -a backups=()
     local -a transform_args=()
     header
@@ -1776,6 +2314,10 @@ restore_menu() {
         if ((TARGET_NAME_SET)); then restore_name="${cls_nm}"; else restore_name="${original_name}"; fi
         if ((TARGET_PORT_SET)); then restore_port="${cls_pt}"; else restore_port="${original_port}"; fi
         validate_identifier "${restore_name}" || die "недопустимое имя кластера: ${restore_name}"
+        restore_data_dir="${original_data_dir%/${original_name}}/${restore_name}"
+        if conflict="$(restore_target_conflict "${version}" "${restore_name}" "${restore_data_dir}")"; then
+            die "${conflict}. Холодный рестори поверх существующего кластера запрещён"
+        fi
         [[ "${restore_port}" =~ ^[0-9]+$ ]] && ((restore_port >= 1 && restore_port <= 65535)) || \
             die "порт должен быть числом от 1 до 65535"
         port_in_use_by_other_cluster "${restore_port}" "${version}" "${restore_name}" && \
@@ -1787,6 +2329,11 @@ restore_menu() {
                 warn "используйте строчные латинские буквы, цифры и подчёркивание"
                 continue
             }
+            restore_data_dir="${original_data_dir%/${original_name}}/${restore_name}"
+            if conflict="$(restore_target_conflict "${version}" "${restore_name}" "${restore_data_dir}")"; then
+                warn "АЛАРМ: ${conflict}; введите другое имя кластера"
+                continue
+            fi
             break
         done
         while true; do
@@ -1803,20 +2350,10 @@ restore_menu() {
         done
     fi
     name="${restore_name}"
-    restore_data_dir="${original_data_dir%/${original_name}}/${restore_name}"
     restore_conf_dir="/etc/postgresql/${version}/${restore_name}"
     printf 'Цель: PostgreSQL %s, кластер %s, порт %s\n' "${version}" "${restore_name}" "${restore_port}"
 
-    if cluster_exists "${version}" "${restore_name}"; then
-        warn "кластер ${version}/${restore_name} уже существует"
-        if ((NON_INTERACTIVE)); then
-            [[ "${OVERWRITE_EXISTING}" == yes ]] || die \
-                "для перезаписи существующего кластера задайте --overwrite yes или PGCC_OVERWRITE=yes"
-        else
-            confirm "Остановить его и перезаписать файлы из бэкапа?" N || return 0
-        fi
-        stop_cluster_checked "${version}" "${restore_name}"
-    elif ((!NON_INTERACTIVE)); then
+    if ((!NON_INTERACTIVE)); then
         confirm "Восстановить кластер с указанными именем и портом?" Y || return 0
     fi
     server_package_installed "${package}" || install_package "${package}"
@@ -1824,6 +2361,9 @@ restore_menu() {
     configure_selected_package
     stop_disable_vendor_service "${SELECTED_PACKAGE}"
     prepare_postgres_root
+    if conflict="$(restore_target_conflict "${version}" "${restore_name}" "${restore_data_dir}")"; then
+        die "${conflict}. Рестори остановлен до распаковки архива"
+    fi
     while IFS= read -r entry; do
         [[ "${entry}" == root/* ]] || die "недопустимый путь в архиве: ${entry}"
         [[ "${entry}" != *'/../'* && "${entry}" != *'/..' && "${entry}" != root/.. ]] || \
@@ -1856,8 +2396,25 @@ EOF
     put_postgresql_setting "${restore_conf_dir}/postgresql.conf" external_pid_file \
         "'/run/postgresql/${version}-${restore_name}.pid'"
 
-    service_file="${service_file:-$(systemd_unit_dir)/postgresql@${version}-${original_name}.service}"
-    restore_service_file="$(dirname -- "${service_file}")/postgresql@${version}-${restore_name}.service"
+    restore_service_file=""
+    if [[ -n "${service_file:-}" ]]; then
+        candidate="$(dirname -- "${service_file}")/postgresql@${version}-${restore_name}.service"
+        [[ -f "${candidate}" ]] && restore_service_file="${candidate}"
+    fi
+    if [[ -z "${restore_service_file}" ]]; then
+        restore_service_file="$(cluster_service_file "${version}" "${restore_name}" || true)"
+    fi
+    unit_dir="$(systemd_unit_dir)"
+    if [[ "${restore_service_file}" == "/.postgres/systemd/save/"* ]]; then
+        candidate="${unit_dir}/postgresql@${version}-${restore_name}.service"
+        cp -f -- "${restore_service_file}" "${candidate}"
+        restore_service_file="${candidate}"
+    elif [[ -z "${restore_service_file}" ]]; then
+        restore_service_file="${unit_dir}/postgresql@${version}-${restore_name}.service"
+        write_cluster_unit_file "${restore_service_file}" "${version}" "${restore_name}" "${restore_data_dir}"
+        printf 'В старом бэкапе отсутствует systemd unit; создан новый %s.\n' \
+            "${restore_service_file}"
+    fi
     replace_literal_in_file "${original_data_dir}" "${restore_data_dir}" "${restore_service_file}"
     replace_literal_in_file "${original_conf_dir}" "${restore_conf_dir}" "${restore_service_file}"
     replace_literal_in_file "${version}-${original_name}" "${version}-${restore_name}" "${restore_service_file}"
@@ -1886,25 +2443,33 @@ info_menu() {
 }
 
 main_menu() {
-    local choice
+    local choice skip_first_header="${1:-0}"
     while true; do
-        header
+        if ((skip_first_header)); then
+            skip_first_header=0
+        else
+            header
+        fi
         step "Выбор действия"
         printf '%s\n' \
             '0 - Выход' \
             '1 - Информация: о развернутых кластерах' \
             '2 - Кластер: Установить' \
-            '3 - Кластер: Бэкап' \
-            '4 - Кластер: Рестори' \
-            '5 - Кластер: Удалить'
+            '3 - Кластер: Переключить порт' \
+            '4 - Кластер: Переместить данные' \
+            '5 - Кластер: Бэкап' \
+            '6 - Кластер: Рестори' \
+            '7 - Кластер: Удалить'
         read -r -p "Выбор: " choice || exit 0
         case "${choice}" in
             0) exit 0 ;;
             1) info_menu ;;
             2) install_menu ;;
-            3) backup_menu ;;
-            4) restore_menu ;;
-            5) delete_menu ;;
+            3) change_port_menu ;;
+            4) move_cluster_data_menu ;;
+            5) backup_menu ;;
+            6) restore_menu ;;
+            7) delete_menu ;;
             *) clear 2>/dev/null || true; exit 0 ;;
         esac
     done
@@ -1927,9 +2492,11 @@ main() {
         header
         step "Подготовка пакетов"
     fi
+    STARTUP_PREPARATION=1
     command -v apt-get >/dev/null 2>&1 || die "поддерживается система пакетов APT"
     ensure_postgresql_common
     if [[ "${ACTION}" == info && "${NON_INTERACTIVE}" == 1 ]]; then
+        STARTUP_PREPARATION=0
         command -v pg_lsclusters >/dev/null 2>&1 || die "не найдена команда pg_lsclusters"
         info_menu
         return 0
@@ -1938,16 +2505,19 @@ main() {
         select_or_install_server
         prepare_postgres_root
     fi
+    STARTUP_PREPARATION=0
     if ((NON_INTERACTIVE)); then
         case "${ACTION}" in
             info) info_menu ;;
             install) install_menu ;;
+            port) change_port_menu ;;
+            move-data) move_cluster_data_menu ;;
             backup) backup_menu ;;
             restore) restore_menu ;;
             delete) delete_menu ;;
         esac
     else
-        main_menu
+        main_menu 1
     fi
 }
 
