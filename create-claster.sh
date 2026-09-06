@@ -9,6 +9,8 @@
 #   PostgreSQL clusters on Astra Linux and compatible Debian-based systems.
 #   The script supports PostgreSQL, Postgres Pro Enterprise, and Tantor Free.
 #   It can run as an interactive menu or as a fully non-interactive command.
+#   Displayed database and data-directory sizes use an aligned field of at most
+#   nine characters, including a space and a two-letter binary size unit.
 #   Every newly created backup contains a commented, shell-safe command that
 #   rebuilds the corresponding mode 3 or mode 4 Debian package non-interactively.
 #
@@ -68,7 +70,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.1.0"
+readonly SCRIPT_VERSION="2.1.1"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly LOCAL_CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
@@ -162,6 +164,8 @@ usage() {
 При неинтерактивном install занятый порт автоматически заменяется первым
 следующим свободным; предупреждение показывает фактический порт и команду
 для его последующей смены.
+Размеры БД и каталогов данных показываются в выровненном поле шириной девять
+символов: две цифры после точки, пробел и двухбуквенная единица измерения.
 
 Общие ключи:
   -h, --help                         Показать эту справку и выйти
@@ -1642,6 +1646,21 @@ validate_database_name() {
     [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
 }
 
+human_size_label() {
+    local bytes="$1"
+    [[ "${bytes}" =~ ^[0-9]+$ ]] || return 1
+    env LC_ALL=C awk -v bytes="${bytes}" 'BEGIN {
+        split("Kb Mb Gb Tb Pb Eb", units, " ")
+        value = bytes / 1024
+        unit = 1
+        while (unit < 6 && value >= 999.995) {
+            value /= 1024
+            unit++
+        }
+        printf "%.2f %s", value, units[unit]
+    }'
+}
+
 load_cluster_databases() {
     local home="$1" socket_dir="$2" port="$3" scope="${4:-selectable}"
     local output row database size_bytes size where_clause
@@ -1657,12 +1676,13 @@ load_cluster_databases() {
     output="$(
         runuser -u postgres -- "${home}/bin/psql" -h "${socket_dir}" -p "${port}" \
             -d postgres -A -t -F $'\t' -q -c \
-            "SELECT datname, size_bytes, pg_size_pretty(size_bytes) FROM (SELECT datname, pg_database_size(datname) AS size_bytes FROM pg_database ${where_clause}) AS database_sizes ORDER BY datname"
+            "SELECT datname, pg_database_size(datname) FROM pg_database ${where_clause} ORDER BY datname"
     )" || return 1
     [[ -n "${output}" ]] && mapfile -t database_rows <<<"${output}"
     for row in "${database_rows[@]}"; do
-        IFS=$'\t' read -r database size_bytes size <<<"${row}"
+        IFS=$'\t' read -r database size_bytes <<<"${row}"
         [[ -n "${database}" ]] || continue
+        size="$(human_size_label "${size_bytes}")" || return 1
         CLUSTER_DATABASES+=("${database}")
         CLUSTER_DATABASE_SIZE_BYTES+=("${size_bytes}")
         CLUSTER_DATABASE_SIZES+=("${size}")
@@ -1685,7 +1705,7 @@ print_cluster_databases() {
     number_width=${#number_width}
     for database in "${CLUSTER_DATABASES[@]}"; do
         ((i += 1))
-        printf '  %*d - %-*s  %s\n' \
+        printf '  %*d - %-*s  %9s\n' \
             "${number_width}" "${i}" "${name_width}" "${database}" \
             "${CLUSTER_DATABASE_SIZES[i - 1]}"
     done
@@ -1869,10 +1889,11 @@ measure_data_directory() {
     bytes_line="$(du -s --block-size=1 -- "${data}")" || die \
         "не удалось определить размер каталога данных ${data} в байтах"
     DATA_DIRECTORY_DU_SH="${size_line}"
-    DATA_DIRECTORY_SIZE_PRETTY="${size_line%%[[:space:]]*}"
     DATA_DIRECTORY_SIZE_BYTES="${bytes_line%%[[:space:]]*}"
     [[ "${DATA_DIRECTORY_SIZE_BYTES}" =~ ^[0-9]+$ ]] || die \
         "получен некорректный размер каталога данных ${data}"
+    DATA_DIRECTORY_SIZE_PRETTY="$(human_size_label "${DATA_DIRECTORY_SIZE_BYTES}")" || die \
+        "не удалось преобразовать размер каталога данных ${data}"
 }
 
 database_in_loaded_list() {
@@ -2224,8 +2245,8 @@ make_cold_backup() {
     fi
 
     measure_data_directory "${data}"
-    printf '\nРазмер каталога данных перед холодным бэкапом (du -sh):\n  %s\n' \
-        "${DATA_DIRECTORY_DU_SH}"
+    printf '\nРазмер каталога данных перед холодным бэкапом:\n  %9s  %s\n' \
+        "${DATA_DIRECTORY_SIZE_PRETTY}" "${data}"
 
     [[ -e "/etc/postgresql/${version}/${name}" ]] && paths+=("etc/postgresql/${version}/${name}")
     rel="${data#/}"; [[ -e "${data}" ]] && paths+=("${rel}")
@@ -2872,6 +2893,7 @@ EOF
 
 info_menu() {
     local choice row version name port status owner data log home socket_dir i
+    local cluster_size_bytes cluster_size
     local -a rows=()
     if ((NON_INTERACTIVE)); then
         header
@@ -2905,6 +2927,18 @@ info_menu() {
         header
         step "Информация: базы данных кластера ${version}/${name}"
         print_cluster_row 'Кластер: ' "${row}"
+        if [[ -d "${data}" ]] && \
+           cluster_size_bytes="$(du -s --block-size=1 -- "${data}" 2>/dev/null)"; then
+            cluster_size_bytes="${cluster_size_bytes%%[[:space:]]*}"
+            if cluster_size="$(human_size_label "${cluster_size_bytes}")"; then
+                printf '\nРазмер каталога данных кластера:\n  %9s  %s\n' \
+                    "${cluster_size}" "${data}"
+            else
+                warn "не удалось преобразовать размер каталога данных ${data}"
+            fi
+        else
+            warn "не удалось определить размер каталога данных ${data}"
+        fi
         if [[ "${status}" != online* ]]; then
             warn "кластер ${version}/${name} не запущен; получить список БД невозможно"
             printf '\n0 - Вернуться к выбору кластера\n'

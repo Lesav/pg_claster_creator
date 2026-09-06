@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.1.0" "Команды разработчика"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.1.1" "Команды разработчика"
 .SH ИМЯ
 create-claster-deb.sh \- сборка Debian-пакетов claster-creator
 .SH СИНТАКСИС
@@ -18,6 +18,12 @@ create-claster-deb.sh \- сборка Debian-пакетов claster-creator
 .BR --non-interactive .
 Каждый пакет зависит от
 .BR postgresql-common .
+.PP
+В интерактивном списке режимов 3 и 4 рядом с типом каждого архива показывается
+его выровненный размер. Значение содержит две цифры после точки, двухбуквенную
+единицу и занимает не более девяти символов. Размер читается через
+.BR stat (1)
+без открытия или распаковки архива.
 .SH РЕЖИМЫ
 .TP
 .B 1
@@ -77,7 +83,10 @@ PostgreSQL Pro contrib 18, 17 и далее до заданного миниму
 Явный
 .B --package
 отключает эту политику и фиксирует точную зависимость. Холодный рестори режима 3
-всегда использует точную версию физического бэкапа.
+всегда использует точную версию физического бэкапа: пакет зависит от
+.B postgresql-common
+и точного серверного пакета из метаданных архива без автоматически добавленного
+contrib.
 .SH КЛЮЧИ
 .TP
 .BR -h , " --help"
@@ -188,7 +197,7 @@ CLASTER_FORCE_DB_INSTALL=1 dpkg -i ПАКЕТ.deb
 .nf
 claster-creator-ВЕРСИЯ.deb
 claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-empty.deb
-claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-fill.deb
+claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-full.deb
 claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-БД.deb
 .fi
 .SH ФАЙЛЫ

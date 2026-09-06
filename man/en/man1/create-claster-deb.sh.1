@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.1.0" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.1.1" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -19,6 +19,12 @@ interactive by default; use
 .B --non-interactive
 for automation. Every package depends on
 .BR postgresql-common .
+.PP
+In the interactive backup list for modes 3 and 4, each archive type is followed
+by its aligned file size. The value uses two fractional digits, a two-letter
+unit, and no more than nine characters. The size is obtained with
+.BR stat (1)
+without opening or extracting the archive.
 .SH MODES
 .TP
 .B 1
@@ -77,7 +83,10 @@ when dependencies are missing.
 An explicit
 .B --package
 disables this policy and keeps an exact dependency. Mode 3 cold restore always
-uses the exact physical-backup version.
+uses the exact physical-backup version: its package depends on
+.B postgresql-common
+and the exact server package recorded in backup metadata, without an
+automatically added contrib package.
 .SH OPTIONS
 .TP
 .BR -h , " --help"
@@ -189,7 +198,7 @@ CLASTER_FORCE_DB_INSTALL=1 dpkg -i PACKAGE.deb
 .nf
 claster-creator-VERSION.deb
 claster-creator-VERSION-PG-PGVER-CLUSTER-empty.deb
-claster-creator-VERSION-PG-PGVER-CLUSTER-fill.deb
+claster-creator-VERSION-PG-PGVER-CLUSTER-full.deb
 claster-creator-VERSION-PG-PGVER-CLUSTER-DATABASE.deb
 .fi
 .SH FILES

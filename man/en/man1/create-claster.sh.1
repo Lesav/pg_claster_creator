@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-06" "pg_claster_creator 2.1.0" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-06" "pg_claster_creator 2.1.1" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -28,8 +28,10 @@ environment variable disables prompts and requires all action-specific values.
 .B info
 In interactive mode, display a numbered list of registered clusters. After an
 online cluster is selected, display a numbered list of all its databases,
-including templates, and the size of each database. A stopped cluster is not
-started automatically.
+including templates, and the size of each database. The selected cluster data
+directory size is shown as well. Human-readable sizes use two fractional digits,
+a two-letter unit, and an aligned field no longer than nine characters. A
+stopped cluster is not started automatically.
 Non-interactive mode prints the
 .BR pg_lsclusters (1)
 table without prompting for a selection.
@@ -141,6 +143,9 @@ options.
 Cold archives contain configuration, data, the selected log file, systemd unit,
 and metadata. Hot archives contain a custom-format dump and
 .IR backup-info.env .
+Before a cold backup, the data-directory size is displayed in the same aligned
+nine-character format. Exact database and directory sizes in bytes are also
+stored in metadata.
 Hot metadata records database size and referenced application roles, including
 available SCRAM or MD5 password verifiers. Missing roles are created before hot
 restore; existing and system roles are not changed.

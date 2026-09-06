@@ -52,7 +52,8 @@
 #   Positional arguments are not accepted. PostgreSQL, cluster, role, password,
 #   and backup-directory defaults are loaded from .new-claster.config. In modes
 #   3 and 4, the interactive dialog lists backups by number, detects hot/cold
-#   type, reads backup-info.env without executing it, and lets the operator
+#   type, shows the aligned archive size obtained via stat without opening the
+#   archive, reads backup-info.env without executing it, and lets the operator
 #   confirm or change supported target values before the package is created.
 #   In mode 4, an implicit postgrespro-ent package treats --pg-version as the
 #   minimum target major. The generated contrib alternatives prefer PostgreSQL
@@ -68,16 +69,16 @@
 #   only CLASTER_FORCE_INSTALL.
 #
 # Output and dependencies:
-#   Every package depends on postgresql-common. Exact deployment modes depend on
-#   the selected server package and matching contrib package. Automatic Postgres
-#   Pro mode uses ordered contrib alternatives, each of which pulls its matching
-#   server; redundant covered server entries are omitted from --depends.
+#   Every package depends on postgresql-common. A cold-backup package depends on
+#   the exact server package recorded in its metadata. Automatic PostgreSQL Pro
+#   hot-backup mode uses ordered contrib alternatives, each of which pulls its
+#   matching server; redundant covered server entries are omitted from --depends.
 # ==============================================================================
 
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.1.0"
+readonly SCRIPT_VERSION="2.1.1"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
 readonly TMP_DIR="${SCRIPT_DIR}/tmp"
@@ -174,8 +175,9 @@ usage() {
 ${CONFIG_FILE}.
 Без --mode сначала выводится интерактивный список режимов. В режимах 2–4
 диалог включён по умолчанию. Для автоматизации используется --non-interactive.
-В диалоге выбирается бэкап, показываются его метаданные и уточняются
-параметры целевого кластера, БД и размещения данных.
+В диалоге выбирается бэкап, рядом с типом показывается выровненный размер
+файла, затем выводятся его метаданные и уточняются параметры целевого кластера,
+БД и размещения данных. Для построения списка архивы не распаковываются.
 
 Для режима 4 с семейством postgrespro-ent и без явного --package значение
 --pg-version является минимальной версией сервера. В Depends записываются
@@ -184,11 +186,14 @@ ${CONFIG_FILE}.
 postgrespro-ent-*-server из --depends исключаются как избыточные.
 Если подходящий полный комплект уже установлен, он сохраняется. Явный --package
 отключает автоматический выбор и фиксирует точный пакет.
+Для холодного бэкапа режима 3 всегда записывается только точный серверный пакет
+из метаданных архива: физический бэкап нельзя переносить на другую основную
+версию PostgreSQL.
 
 Имена результатов:
   claster-creator-${SCRIPT_VERSION}.deb
   claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-empty.deb
-  claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-fill.deb
+  claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-full.deb
   claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-<БД>.deb
 
 Примеры:
@@ -367,6 +372,22 @@ backup_kind_label() {
     esac
 }
 
+backup_file_size_label() {
+    local backup_file="$1" bytes
+    bytes="$(stat -Lc '%s' -- "${backup_file}" 2>/dev/null)" || return 1
+    [[ "${bytes}" =~ ^[0-9]+$ ]] || return 1
+    env LC_ALL=C awk -v bytes="${bytes}" 'BEGIN {
+        split("Kb Mb Gb Tb Pb Eb", units, " ")
+        value = bytes / 1024
+        unit = 1
+        while (unit < 6 && value >= 999.995) {
+            value /= 1024
+            unit++
+        }
+        printf "%.2f %s", value, units[unit]
+    }'
+}
+
 backup_filename_supported() {
     [[ "${1##*/}" =~ ^[0-9]+-[A-Za-z0-9_][A-Za-z0-9_.-]*-[0-9]{8}-[0-9]{6}(-dmp)?\.tar\.gz$ ]]
 }
@@ -384,7 +405,7 @@ resolve_backup_file() {
 }
 
 select_backup_interactive() {
-    local required_kind="$1" selected kind choice i
+    local required_kind="$1" selected kind kind_label size_label choice i
     local -a backups=()
     if [[ -n "${BACKUP_FILE}" ]]; then
         BACKUP_FILE="$(resolve_backup_file "${BACKUP_FILE}")" || {
@@ -419,7 +440,12 @@ select_backup_interactive() {
         printf '\nДоступные резервные копии:\n'
         for i in "${!backups[@]}"; do
             kind="$(backup_kind "${backups[i]}")"
-            printf '%3d - [%-9s] %s\n' "$((i + 1))" "$(backup_kind_label "${kind}")" "${backups[i]##*/}"
+            case "${kind}" in
+                hot) kind_label='горячий ' ;;
+                cold) kind_label='холодный' ;;
+            esac
+            size_label="$(backup_file_size_label "${backups[i]}")" || size_label='н/д'
+            printf '%3d - [%s | %9s] %s\n' "$((i + 1))" "${kind_label}" "${size_label}" "${backups[i]##*/}"
         done
         printf '  0 - Отменить сборку\n'
         read -r -p "Выберите резервную копию: " choice || return 1
@@ -1005,7 +1031,7 @@ package_basename() {
         1) printf 'claster-creator-%s' "${SCRIPT_VERSION}" ;;
         2) printf 'claster-creator-%s-%s-%s-%s-empty' \
             "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${cls_nm}" ;;
-        3) printf 'claster-creator-%s-%s-%s-%s-fill' \
+        3) printf 'claster-creator-%s-%s-%s-%s-full' \
             "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${cls_nm}" ;;
         4) printf 'claster-creator-%s-%s-%s-%s-%s' \
             "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${cls_nm}" "${DATABASE_NAME}" ;;
@@ -1019,7 +1045,7 @@ dependency_list() {
             dependencies+=", $(postgrespro_alternative_dependencies)"
         else
             dependencies+=", ${SERVER_PACKAGE}"
-            if [[ "${SERVER_PACKAGE}" =~ ^postgrespro-ent-([0-9]+)-server$ ]]; then
+            if [[ "${MODE}" != 3 && "${SERVER_PACKAGE}" =~ ^postgrespro-ent-([0-9]+)-server$ ]]; then
                 dependencies+=", postgrespro-ent-${BASH_REMATCH[1]}-contrib"
             fi
         fi
