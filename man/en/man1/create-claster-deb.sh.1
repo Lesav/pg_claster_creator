@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.0.1" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.0.2" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -37,6 +37,36 @@ Install the files, create a cluster, and restore an embedded hot database dump.
 For modes 2 through 4, postinst first checks the exact cluster version and name.
 If that cluster is already registered, postinst prints a warning, skips the
 remaining deployment actions, and exits with status 0.
+.SH POSTGRES PRO VERSION SELECTION
+In mode 4 with
+.B postgrespro-ent
+and no explicit
+.BR --package ,
+the value of
+.B --pg-version
+is the minimum target major version. Package dependencies list PostgreSQL Pro
+contrib 18, 17, and so on down to that minimum, with newer alternatives first.
+Each contrib package has an exact dependency on the server of the same release,
+so APT selects a matching server and extension set. The generated postinst uses
+the release that was actually installed for cluster creation and hot restore.
+An already installed minimum release is retained.
+.PP
+For example, a mode 4 package built with a minimum of 14 installs PostgreSQL
+Pro 16 when the target repository offers releases 13 through 16. Release 13 is
+not an eligible alternative.
+.PP
+Install the resulting local package with
+.B apt install ./PACKAGE.deb
+to resolve alternatives and download missing dependencies. The
+.B dpkg -i
+command alone does not download server packages; it requires a subsequent
+.B apt -f install
+when dependencies are missing.
+.PP
+An explicit
+.B --package
+disables this policy and keeps an exact dependency. Mode 3 cold restore always
+uses the exact physical-backup version.
 .SH OPTIONS
 .TP
 .BR -h , " --help"
@@ -52,7 +82,8 @@ Select mode 1, 2, 3, or 4.
 Select postgresql, postgrespro-ent, or tantor-free.
 .TP
 .BI "--pg-version " VERSION
-Set the PostgreSQL major version.
+Set the PostgreSQL major version. For automatic PostgreSQL Pro mode 4 packages,
+this is the minimum target version.
 .TP
 .BI "--cluster-name " NAME
 Set the target cluster name.
@@ -61,7 +92,8 @@ Set the target cluster name.
 Set the target TCP port.
 .TP
 .BI "--package " PACKAGE
-Set an exact server package and dependency.
+Set an exact server package and dependency, disabling automatic selection of a
+newer PostgreSQL Pro release.
 .TP
 .BI "--schema " NAME
 Set the schema and owner role for a new cluster.

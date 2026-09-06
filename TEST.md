@@ -1,4 +1,4 @@
-# Тестирование версии 2.0.1
+# Тестирование версии 2.0.2
 
 ## Среда проверки
 
@@ -80,7 +80,7 @@
 - наличие ссылок `/.postgres/include -> /opt/pgpro/ent-16/include` и `/.postgres/run -> /var/run`;
 - отсутствие при штатном повторном запуске строк об уже установленных пакетах, вывода `systemd-sysv-install` и подтверждения успешного отключения vendor-службы;
 - сохранение сообщения `Каталог данных используется через ссылку ...` при переходе к Menu1 без очистки терминала;
-- единственный вывод строки `create-claster.sh, версия 2.0.1` от начала подготовки до первого показа Menu1;
+- единственный вывод строки `create-claster.sh, версия 2.0.2` от начала подготовки до первого показа Menu1;
 - успешный переход в главное меню без создания кластера.
 
 В ходе первого диагностического запуска до добавления защиты APT удалил конфликтующий метапакет `postgrespro-ent-16` при установке `postgresql-common`. Пакеты `postgrespro-ent-16-server`, `postgrespro-ent-16-client` и `postgrespro-ent-16-contrib` остались установленными. После этого в сценарий добавлена обязательная симуляция APT: если планируется удаление любого пакета, фактическая операция не начинается.
@@ -327,7 +327,7 @@
 В локальной WSL Astra Linux проверены:
 
 - синтаксис `create-claster-backup.sh` командой `bash -n`;
-- вывод `create-claster-backup.sh, версия 2.0.1` и подробной справки;
+- вывод `create-claster-backup.sh, версия 2.0.2` и подробной справки;
 - передача аргументов `--action backup 16 alpha --backup-type hot --database appdb --backup-dir ...` в основной сценарий;
 - очистка по `--files-cnt 2` только после успешного завершения макета горячего бэкапа;
 - сохранение двух самых новых архивов задачи `16/alpha/appdb`;
@@ -345,13 +345,13 @@
 В локальной WSL Astra Linux SE 1.6 с `dpkg-deb 1.18.26` проверены:
 
 - синтаксис `create-claster-deb.sh` командой `bash -n`;
-- вывод версии `create-claster-deb.sh, версия 2.0.1` и полной справки;
+- вывод версии `create-claster-deb.sh, версия 2.0.2` и полной справки;
 - автоматическое создание чистого скелета `tmp/create-claster-deb.XXXXXX/rootFs` без зависимости от заранее подготовленного `tmp/rootFs`;
 - удаление временного скелета после успешной сборки;
 - после переименования тестовый пакет режима 1 собран в `tmp`, без перезаписи зафиксированного пакета в `dist`;
-- сборка режима 1 по явному ключу в `dist/claster-creator-2.0.1.deb`;
+- сборка режима 1 по явному ключу в `dist/claster-creator-2.0.2.deb`;
 - чтение результата через `dpkg-deb --info` и `dpkg-deb --contents`;
-- поля `Package: claster-creator`, `Version: 2.0.1`, `Architecture: all` и `Depends: postgresql-common`;
+- поля `Package: claster-creator`, `Version: 2.0.2`, `Architecture: all` и `Depends: postgresql-common`;
 - наличие семи требуемых файлов в `/usr/local/share/pg_claster_creator/` с правами `0755` для трёх сценариев, `0600` для конфига и `0644` для документации;
 - наличие трёх английских страниц в `/usr/share/man/man1` и трёх русских страниц в `/usr/share/man/ru/man1`, все с правами `0644` и суффиксом `.1.gz`;
 - проверка целостности всех шести упакованных страниц через `gzip -t`;
@@ -363,8 +363,13 @@
 - тестовый DEB распакован в `tmp`, после чего установленная копия `create-claster-deb.sh` самостоятельно собрала второй корректный пакет;
 - установленная копия повторно использовала сжатые MAN-страницы из относительного системного дерева `usr/share/man`, не требуя исходников `man/en` и `man/ru` рядом со сборщиком;
 - владельцы `root:root` и права `0755` каталогов при сборке на Windows FS через `fakeroot`;
-- тестовая сборка режима 2 с именем `claster-creator-2.0.1-postgrespro-ent-16-reltest-empty.deb`;
+- тестовая сборка режима 2 с именем `claster-creator-2.0.2-postgrespro-ent-16-reltest-empty.deb`;
 - зависимости режима 2 от `postgresql-common`, `postgrespro-ent-16-server` и `postgrespro-ent-16-contrib`;
+- тестовая неинтерактивная сборка режима 4 с минимальной версией PostgreSQL Pro 14 и горячим архивом допустимого формата;
+- поле `Depends` такого пакета содержит упорядоченные альтернативы `postgrespro-ent-18-contrib | postgrespro-ent-17-contrib | postgrespro-ent-16-contrib | postgrespro-ent-15-contrib | postgrespro-ent-14-contrib`; проверено, что `contrib` выбранной версии требует соответствующий `server` той же версии;
+- симуляция APT с пустой базой установленных пакетов и репозиторием, содержащим PostgreSQL Pro 13–16, выбрала самый новый доступный комплект `postgrespro-ent-16-server` + `postgrespro-ent-16-contrib`;
+- план установки содержит `prefer_newest_server=yes`, а извлечённый `postinst` проходит `bash -n` и на реальном наборе установленных пакетов разрешает минимум 14 в `postgrespro-ent-16-server|16`;
+- повторная сборка с явным `--package postgrespro-ent-14-server` содержит только точные зависимости `postgrespro-ent-14-server` и `postgrespro-ent-14-contrib`, а план содержит `prefer_newest_server=no`;
 - наличие исполняемого `postinst`, передающего установку в неинтерактивный интерфейс `create-claster.sh`;
 - сгенерированный `postinst` режимов 2 и 4 выполнен на макете пакетного корня против реально зарегистрированного кластера `16/subsys`;
 - в обоих режимах получено предупреждение `кластер 16/subsys уже развёрнут; действия postinst пропущены`, код завершения `0` и только итоговый маркер `.done`; основной сценарий, рестори и создание промежуточных маркеров не выполнялись;
@@ -373,7 +378,7 @@
 - при `CLASTER_FORCE_DB_INSTALL=1` в режиме 4 существующий кластер сохранился, вызов `delete`/`install` отсутствовал, маркер `.done` был проигнорирован и выполнен только `restore` горячего дампа;
 - `CLASTER_FORCE_DB_INSTALL=1` в холодном режиме 3 отклонён до вызова основного сценария; одновременная передача обоих принудительных флагов также отклонена до изменения состояния;
 - сборка режимов 3 и 4 на малых тестовых архивах допустимого формата;
-- имена `claster-creator-2.0.1-postgrespro-ent-16-coldtest-fill.deb` и `claster-creator-2.0.1-postgrespro-ent-16-hottest-appdb.deb`;
+- имена `claster-creator-2.0.2-postgrespro-ent-16-coldtest-fill.deb` и `claster-creator-2.0.2-postgrespro-ent-16-hottest-appdb.deb`;
 - включение холодного/горячего архива в защищённый каталог `package-data` и установка плана с правами `0600`;
 - отказ режимов 3 и 4 при отсутствии обязательного пути к бэкапу;
 - защита существующего результата от перезаписи без `--force`.
@@ -437,6 +442,7 @@ cluster color tests: OK
 database deletion menu tests: OK
 live database deletion selection test: OK
 DEB package build and metadata tests: OK
+PostgreSQL Pro minimum-version dependency tests: OK
 bilingual man-page source and package tests: OK
 ```
 

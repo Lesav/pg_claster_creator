@@ -48,6 +48,10 @@
 #   3 and 4, the interactive dialog lists backups by number, detects hot/cold
 #   type, reads backup-info.env without executing it, and lets the operator
 #   confirm or change supported target values before the package is created.
+#   In mode 4, an implicit postgrespro-ent package treats --pg-version as the
+#   minimum target major. The generated contrib alternatives prefer PostgreSQL
+#   Pro 18, then 17, down to that minimum; contrib pulls the matching server.
+#   An explicit --package keeps exact behavior.
 #
 # Package-install environment:
 #   CLASTER_FORCE_INSTALL=1     Remove an existing target cluster without a
@@ -66,13 +70,14 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.0.1"
+readonly SCRIPT_VERSION="2.0.2"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
 readonly TMP_DIR="${SCRIPT_DIR}/tmp"
 readonly INSTALL_DIR="/usr/local/share/pg_claster_creator"
 readonly COMMAND_LINK="/usr/local/bin/create-claster.sh"
 readonly BACKUP_COMMAND_LINK="/usr/local/bin/create-claster-backup.sh"
+readonly POSTGRESPRO_MAX_AUTO_VERSION=18
 
 MODE=""
 OUTPUT_DIR="${SCRIPT_DIR}/dist"
@@ -84,6 +89,7 @@ DATABASE_NAME=""
 EXTRA_DEPENDENCIES_INPUT=""
 INTERACTIVE_MODE="yes"
 MOVE_AFTER_RESTORE="no"
+PREFER_NEWEST_SERVER="no"
 FORCE_BUILD=0
 BUILD_WORK_DIR=""
 BUILD_ROOT=""
@@ -136,7 +142,8 @@ usage() {
   -v, --version               Показать версию и выйти
   -m, --mode РЕЖИМ            Явно выбрать режим сборки 1|2|3|4
       --pg-family СЕМЕЙСТВО   postgresql|postgrespro-ent|tantor-free
-      --pg-version ВЕРСИЯ     Основная версия PostgreSQL
+      --pg-version ВЕРСИЯ     Основная версия PostgreSQL; минимум для
+                              postgrespro-ent в режиме 4 без --package
       --cluster-name ИМЯ      Имя создаваемого/восстанавливаемого кластера
       --port ПОРТ             TCP-порт кластера
       --package ПАКЕТ         Точный серверный пакет; по умолчанию вычисляется
@@ -161,6 +168,13 @@ ${CONFIG_FILE}.
 В диалоге выбирается бэкап, показываются его метаданные и уточняются
 параметры целевого кластера, БД и размещения данных.
 
+Для режима 4 с семейством postgrespro-ent и без явного --package значение
+--pg-version является минимальной версией сервера. В Depends записываются
+альтернативы contrib от PostgreSQL Pro 18 до указанной версии, новые раньше
+старых; каждый contrib устанавливает сервер той же версии.
+Если подходящий полный комплект уже установлен, он сохраняется. Явный --package
+отключает автоматический выбор и фиксирует точный пакет.
+
 Имена результатов:
   claster-creator-${SCRIPT_VERSION}.deb
   claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-empty.deb
@@ -178,6 +192,9 @@ ${CONFIG_FILE}.
 
 Устанавливать результат рекомендуется через apt:
   apt install ./dist/ИМЯ_ПАКЕТА.deb
+
+Именно apt разрешает альтернативы и загружает отсутствующие зависимости.
+Один dpkg -i не скачивает серверные пакеты; после него потребовался бы apt -f install.
 
 Переменные для принудительной установки готового пакета:
   CLASTER_FORCE_INSTALL=1     Удалить существующий кластер без бэкапа и
@@ -723,6 +740,7 @@ interactive_configuration() {
         package_default="$(default_server_package)"
         [[ -n "${SERVER_PACKAGE}" && "${PACKAGE_SET}" == 1 ]] || SERVER_PACKAGE="${package_default}"
         prompt_validated_value SERVER_PACKAGE 'Серверный пакет' "${SERVER_PACKAGE}" validate_package_name 'недопустимое имя пакета' || return 1
+        [[ "${SERVER_PACKAGE}" == "${package_default}" ]] || PACKAGE_SET=1
     else
         printf '\nВерсия и серверный пакет холодного бэкапа сохраняются без изменения:\n'
         printf '  %s, %s, %s\n' "${pg}" "${pg_ver}" "${SERVER_PACKAGE}"
@@ -755,6 +773,9 @@ interactive_configuration() {
     printf '  Семейство:           %s\n' "${pg}"
     printf '  Версия PostgreSQL:   %s\n' "${pg_ver}"
     printf '  Серверный пакет:     %s\n' "${SERVER_PACKAGE}"
+    if [[ "${MODE}" == 4 && "${pg}" == postgrespro-ent && "${PACKAGE_SET}" == 0 ]]; then
+        printf '  Выбор сервера:       самый новый доступный, версия не ниже %s\n' "${pg_ver}"
+    fi
     printf '  Доп. зависимости:   %s\n' "${EXTRA_DEPENDENCIES[*]:-нет}"
     printf '  Целевой кластер:     %s\n' "${cls_nm}"
     printf '  TCP-порт:            %s\n' "${cls_pt}"
@@ -818,6 +839,9 @@ validate_options() {
         fi
         [[ "${SERVER_PACKAGE}" =~ ^[a-z0-9][a-z0-9+.-]*$ ]] || \
             die "недопустимое имя серверного пакета: ${SERVER_PACKAGE}"
+        if [[ "${MODE}" == 4 && "${pg}" == postgrespro-ent && "${PACKAGE_SET}" == 0 ]]; then
+            PREFER_NEWEST_SERVER=yes
+        fi
     fi
 
     case "${MODE}" in
@@ -863,15 +887,30 @@ package_basename() {
 dependency_list() {
     local dependencies="postgresql-common" dependency
     if [[ "${MODE}" != 1 ]]; then
-        dependencies+=", ${SERVER_PACKAGE}"
-        if [[ "${SERVER_PACKAGE}" =~ ^postgrespro-ent-([0-9]+)-server$ ]]; then
-            dependencies+=", postgrespro-ent-${BASH_REMATCH[1]}-contrib"
+        if [[ "${PREFER_NEWEST_SERVER}" == yes ]]; then
+            dependencies+=", $(postgrespro_alternative_dependencies)"
+        else
+            dependencies+=", ${SERVER_PACKAGE}"
+            if [[ "${SERVER_PACKAGE}" =~ ^postgrespro-ent-([0-9]+)-server$ ]]; then
+                dependencies+=", postgrespro-ent-${BASH_REMATCH[1]}-contrib"
+            fi
         fi
     fi
     for dependency in "${EXTRA_DEPENDENCIES[@]}"; do
         dependencies+=", ${dependency}"
     done
     printf '%s' "${dependencies}"
+}
+
+postgrespro_alternative_dependencies() {
+    local minimum="${pg_ver}" maximum="${POSTGRESPRO_MAX_AUTO_VERSION}" version
+    local contrib_dependencies=""
+    ((minimum > maximum)) && maximum="${minimum}"
+    for ((version = maximum; version >= minimum; version -= 1)); do
+        [[ -z "${contrib_dependencies}" ]] || contrib_dependencies+=' | '
+        contrib_dependencies+="postgrespro-ent-${version}-contrib"
+    done
+    printf '%s' "${contrib_dependencies}"
 }
 
 write_plan_value() {
@@ -899,6 +938,7 @@ create_install_plan() {
         write_plan_value db_password "${cls_pw}"
         write_plan_value data_root "${DATA_ROOT}"
         write_plan_value server_package "${SERVER_PACKAGE}"
+        write_plan_value prefer_newest_server "${PREFER_NEWEST_SERVER}"
         write_plan_value database_name "${DATABASE_NAME}"
         write_plan_value backup_name "${backup_name}"
         write_plan_value move_after_restore "${MOVE_AFTER_RESTORE}"
@@ -923,6 +963,49 @@ readonly plan_file="${creator_dir}/.package-install.env"
 
 # shellcheck disable=SC1090
 source "${plan_file}"
+
+postgrespro_package_installed() {
+    local version="$1"
+    dpkg-query -W -f='${db:Status-Abbrev}' "postgrespro-ent-${version}-server" 2>/dev/null | grep -q '^ii ' &&
+        dpkg-query -W -f='${db:Status-Abbrev}' "postgrespro-ent-${version}-contrib" 2>/dev/null | grep -q '^ii '
+}
+
+select_postgrespro_runtime() {
+    local minimum="$1" package version selected=""
+    if postgrespro_package_installed "${minimum}"; then
+        printf 'postgrespro-ent-%s-server|%s' "${minimum}" "${minimum}"
+        return
+    fi
+    while IFS= read -r package; do
+        package="${package%%:*}"
+        [[ "${package}" =~ ^postgrespro-ent-([0-9]+)-server$ ]] || continue
+        version="${BASH_REMATCH[1]}"
+        ((version >= minimum)) || continue
+        postgrespro_package_installed "${version}" || continue
+        if [[ -z "${selected}" || version -gt ${selected##*|} ]]; then
+            selected="${package}|${version}"
+        fi
+    done < <(
+        dpkg-query -W -f='${binary:Package}\n' 'postgrespro-ent-*-server' 2>/dev/null || true
+    )
+    [[ -n "${selected}" ]] || return 1
+    printf '%s' "${selected}"
+}
+
+if [[ "${prefer_newest_server:-no}" == yes ]]; then
+    readonly requested_pg_version="${pg_version}"
+    runtime_server="$(select_postgrespro_runtime "${requested_pg_version}")" || {
+        printf 'ОШИБКА: не найден полный комплект postgrespro-ent версии %s или новее (server + contrib).\n' \
+            "${requested_pg_version}" >&2
+        exit 1
+    }
+    server_package="${runtime_server%%|*}"
+    pg_version="${runtime_server##*|}"
+    if [[ "${pg_version}" != "${requested_pg_version}" ]]; then
+        printf 'Выбран PostgreSQL Pro %s — самая новая установленная версия не ниже %s.\n' \
+            "${pg_version}" "${requested_pg_version}"
+    fi
+fi
 readonly state_dir="/var/lib/claster-creator"
 readonly done_marker="${state_dir}/${plan_id}.done"
 readonly cluster_marker="${state_dir}/${plan_id}.cluster-created"

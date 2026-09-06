@@ -63,7 +63,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.0.1"
+readonly SCRIPT_VERSION="2.0.2"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly LOCAL_CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
