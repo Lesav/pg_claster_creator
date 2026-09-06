@@ -54,17 +54,25 @@
 #   PGCC_CLEAR_WAL, and PGCC_OVERWRITE mirror the command-line options.
 #
 # Configuration:
-#   Defaults are loaded from .new-claster.config located next to this script.
+#   Defaults are loaded from .new-claster.config located next to this script. If
+#   that file is absent, ../share/pg_claster_creator/.new-claster.config relative
+#   to the invoked script is used (the layout installed by the Debian package).
 #   Command-line arguments override environment variables, and environment
 #   variables override configuration defaults. Run --help for complete examples.
 # ==============================================================================
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.0.1"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
+readonly LOCAL_CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
+readonly INSTALLED_CONFIG_FILE="$(realpath -m -- "${SCRIPT_DIR}/../share/pg_claster_creator/.new-claster.config")"
+CONFIG_FILE="${LOCAL_CONFIG_FILE}"
+if [[ ! -r "${CONFIG_FILE}" && -r "${INSTALLED_CONFIG_FILE}" ]]; then
+    CONFIG_FILE="${INSTALLED_CONFIG_FILE}"
+fi
+readonly CONFIG_FILE
 readonly SEPARATOR="-------------------------------------------------------------------------------"
 
 declare SELECTED_PACKAGE=""
@@ -433,7 +441,8 @@ require_root() {
 }
 
 load_config() {
-    [[ -r "${CONFIG_FILE}" ]] || die "не найден конфиг ${CONFIG_FILE}"
+    [[ -r "${CONFIG_FILE}" ]] || die \
+        "не найден конфиг ${LOCAL_CONFIG_FILE} или ${INSTALLED_CONFIG_FILE}"
     chmod 600 "${CONFIG_FILE}" 2>/dev/null || true
     # shellcheck source=/dev/null
     source "${CONFIG_FILE}"
@@ -1601,9 +1610,9 @@ load_cluster_databases() {
 }
 
 print_cluster_databases() {
-    local home="$1" socket_dir="$2" port="$3" version="$4" cluster="$5"
+    local home="$1" socket_dir="$2" port="$3" version="$4" cluster="$5" scope="${6:-selectable}"
     local database i=0 name_width=0 number_width
-    load_cluster_databases "${home}" "${socket_dir}" "${port}" || return 1
+    load_cluster_databases "${home}" "${socket_dir}" "${port}" "${scope}" || return 1
     for database in "${CLUSTER_DATABASES[@]}"; do
         ((${#database} > name_width)) && name_width=${#database}
     done
@@ -2693,12 +2702,62 @@ EOF
 }
 
 info_menu() {
-    header
-    step "Информация: о развернутых кластерах"
-    pg_lsclusters || true
-    ((NON_INTERACTIVE)) && return 0
-    printf '\n0 - Вернуться назад\n'
-    read -r -p "Выбор: " _ || true
+    local choice row version name port status owner data log home socket_dir i
+    local -a rows=()
+    if ((NON_INTERACTIVE)); then
+        header
+        step "Информация: о развернутых кластерах"
+        pg_lsclusters || true
+        return 0
+    fi
+    while true; do
+        header
+        step "Информация: о развернутых кластерах"
+        mapfile -t rows < <(cluster_rows)
+        if ((${#rows[@]} == 0)); then
+            printf 'Развёрнутых кластеров нет.\n\n0 - Вернуться назад\n'
+            read -r -p "Выбор: " _ || true
+            return 0
+        fi
+        for i in "${!rows[@]}"; do
+            print_cluster_row "$(printf '%3d - ' "$((i + 1))")" "${rows[i]}"
+        done
+        printf '  0 - Вернуться назад\n'
+        read -r -p "Выберите кластер: " choice || return 0
+        if [[ ! "${choice}" =~ ^[0-9]+$ ]] || \
+           ((choice < 0 || choice > ${#rows[@]})); then
+            clear 2>/dev/null || true
+            return 0
+        fi
+        ((choice == 0)) && return 0
+
+        row="${rows[choice - 1]}"
+        read -r version name port status owner data log <<<"${row}"
+        header
+        step "Информация: базы данных кластера ${version}/${name}"
+        print_cluster_row 'Кластер: ' "${row}"
+        if [[ "${status}" != online* ]]; then
+            warn "кластер ${version}/${name} не запущен; получить список БД невозможно"
+            printf '\n0 - Вернуться к выбору кластера\n'
+        else
+            home="$(cluster_pg_home "${version}" "${data}")"
+            socket_dir="$(cluster_socket_directory "${port}" || true)"
+            if [[ ! -x "${home}/bin/psql" ]]; then
+                warn "не найден psql для кластера ${version}/${name}: ${home}/bin/psql"
+                printf '\n0 - Вернуться к выбору кластера\n'
+            elif [[ -z "${socket_dir}" ]]; then
+                warn "не найден локальный сокет кластера ${version}/${name} на порту ${port}"
+                printf '\n0 - Вернуться к выбору кластера\n'
+            elif ! print_cluster_databases "${home}" "${socket_dir}" "${port}" "${version}" "${name}" all; then
+                warn "не удалось получить список БД кластера ${version}/${name}"
+                printf '\n0 - Вернуться к выбору кластера\n'
+            elif ((${#CLUSTER_DATABASES[@]} == 0)); then
+                printf '  0 - Вернуться к выбору кластера\n'
+            fi
+        fi
+        read -r -p "Выбор: " _ || return 0
+        clear 2>/dev/null || true
+    done
 }
 
 main_menu() {

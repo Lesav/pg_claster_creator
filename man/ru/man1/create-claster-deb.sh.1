@@ -1,14 +1,14 @@
-.TH CREATE-DEB.SH 1 "2026-09-05" "pg_claster_creator 2.0.0" "Команды разработчика"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.0.1" "Команды разработчика"
 .SH ИМЯ
-create-deb.sh \- сборка Debian-пакетов claster-creator
+create-claster-deb.sh \- сборка Debian-пакетов claster-creator
 .SH СИНТАКСИС
-.B create-deb.sh
+.B create-claster-deb.sh
 .RI [ ключи ]
 .SH ОПИСАНИЕ
-.B create-deb.sh
+.B create-claster-deb.sh
 формирует устанавливаемые Debian-пакеты из дерева исходного проекта. Для каждой
 сборки создаётся чистый файловый скелет
-.IR tmp/create-deb.XXXXXX/rootFs ,
+.IR tmp/create-claster-deb.XXXXXX/rootFs ,
 который наполняется и удаляется при завершении. По умолчанию результат сохраняется
 в каталоге
 .IR dist .
@@ -32,6 +32,10 @@ man-страницы и командные ссылки.
 .TP
 .B 4
 Установить файлы, создать кластер и восстановить встроенный горячий дамп БД.
+.PP
+Для режимов 2(en4 сценарий postinst сначала проверяет точное сочетание версии
+и имени кластера. Если кластер уже зарегистрирован, выводится предупреждение,
+оставшиеся действия пропускаются, а postinst завершается с кодом 0.
 .SH КЛЮЧИ
 .TP
 .BR -h , " --help"
@@ -95,6 +99,26 @@ man-страницы и командные ссылки.
 .TP
 .BR -f , " --force"
 Разрешить замену существующего файла результата.
+.SH ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ПРИ УСТАНОВКЕ ПАКЕТА
+.TP
+.B CLASTER_FORCE_INSTALL=1
+Для режимов 2(en4 игнорировать прежние маркеры, удалить существующий целевой
+кластер без создания бэкапа, проверить его удаление и заново выполнить полный
+план пакета. Для холодного рестори режима 3 используется именно этот флаг.
+.TP
+.B CLASTER_FORCE_DB_INSTALL=1
+Только режим 4. Сохранить существующий кластер и повторно восстановить целевую
+БД из встроенного горячего дампа с разрешённой очисткой БД. Если кластера нет,
+он создаётся обычным способом. В режимах 2 и 3 флаг отклоняется.
+.PP
+Два принудительных флага взаимоисключающие. Их нужно передавать в окружении
+.BR dpkg (1),
+например:
+.PP
+.nf
+CLASTER_FORCE_INSTALL=1 dpkg -i ПАКЕТ.deb
+CLASTER_FORCE_DB_INSTALL=1 dpkg -i ПАКЕТ.deb
+.fi
 .SH ИМЕНА ПАКЕТОВ
 .nf
 claster-creator-ВЕРСИЯ.deb
@@ -104,21 +128,26 @@ claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-БД.deb
 .fi
 .SH ФАЙЛЫ
 .TP
+.I /usr/local/share/pg_claster_creator/create-claster-deb.sh
+Установленный сборщик. Ссылка команды в
+.I /usr/local/bin
+не создаётся.
+.TP
 .I .new-claster.config
 Интерактивные значения по умолчанию.
 .TP
-.I tmp/create-deb.XXXXXX/rootFs
+.I tmp/create-claster-deb.XXXXXX/rootFs
 Временный файловый скелет пакета.
 .TP
 .I dist
 Дефолтный каталог результатов.
 .SH ПРИМЕРЫ
 .nf
-\&./create-deb.sh
-\&./create-deb.sh --mode 1
-\&./create-deb.sh --mode 2 --depends postgis,pgbouncer
-\&./create-deb.sh --mode 3 --backup-dir /.postgres/backup
-\&./create-deb.sh --mode 4 --non-interactive \
+\&./create-claster-deb.sh
+\&./create-claster-deb.sh --mode 1
+\&./create-claster-deb.sh --mode 2 --depends postgis,pgbouncer
+\&./create-claster-deb.sh --mode 3 --backup-dir /.postgres/backup
+\&./create-claster-deb.sh --mode 4 --non-interactive \
   --pg-family postgrespro-ent --pg-version 16 \
   --cluster-name subsys --database asvd \
   --backup-file /.postgres/backup/16-asvd-20260905-105802-dmp.tar.gz

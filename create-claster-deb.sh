@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# Script: create-deb.sh
+# Script: create-claster-deb.sh
 # Author: Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>
 #
 # Purpose:
@@ -11,6 +11,8 @@
 #   output directory is requested. With no --mode argument, the script opens an
 #   interactive mode selection menu. Modes 2-4 generate an idempotent postinst deployment
 #   procedure; --mode 1 performs a direct scripts-only package build.
+#   Every package installs this builder below /usr/local/share/pg_claster_creator
+#   but intentionally does not create a command symlink for it in /usr/local/bin.
 #
 # Package modes accepted by --mode:
 #   1  Install scripts, configuration, documentation, and the command symlink.
@@ -47,6 +49,14 @@
 #   type, reads backup-info.env without executing it, and lets the operator
 #   confirm or change supported target values before the package is created.
 #
+# Package-install environment:
+#   CLASTER_FORCE_INSTALL=1     Remove an existing target cluster without a
+#                               backup, then execute the complete mode 2-4 plan.
+#   CLASTER_FORCE_DB_INSTALL=1  Mode 4 only: keep the existing cluster and
+#                               overwrite the target DB from the hot dump.
+#   The two force flags are mutually exclusive. Mode 3 cold restores support
+#   only CLASTER_FORCE_INSTALL.
+#
 # Output and dependencies:
 #   Every package depends on postgresql-common. Deployment modes also depend on
 #   the selected server package; Postgres Pro packages include the matching
@@ -55,8 +65,8 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_NAME="create-deb.sh"
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_NAME="create-claster-deb.sh"
+readonly SCRIPT_VERSION="2.0.1"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
 readonly TMP_DIR="${SCRIPT_DIR}/tmp"
@@ -168,6 +178,17 @@ ${CONFIG_FILE}.
 
 Устанавливать результат рекомендуется через apt:
   apt install ./dist/ИМЯ_ПАКЕТА.deb
+
+Переменные для принудительной установки готового пакета:
+  CLASTER_FORCE_INSTALL=1     Удалить существующий кластер без бэкапа и
+                              выполнить полный план режимов 2, 3 или 4
+  CLASTER_FORCE_DB_INSTALL=1  Только режим 4: сохранить кластер и заново
+                              восстановить целевую БД из горячего дампа
+
+Флаги взаимоисключающие. Для холодного бэкапа режима 3 поддерживается только
+CLASTER_FORCE_INSTALL. Пример:
+  CLASTER_FORCE_INSTALL=1 dpkg -i ./dist/ИМЯ_ПАКЕТА.deb
+  CLASTER_FORCE_DB_INSTALL=1 dpkg -i ./dist/ИМЯ_ПАКЕТА.deb
 EOF
 }
 
@@ -182,7 +203,7 @@ die() {
 
 cleanup() {
     if [[ -n "${BUILD_WORK_DIR}" && -n "${TMP_DIR}" && \
-          "${BUILD_WORK_DIR}" == "${TMP_DIR}/create-deb."* ]]; then
+          "${BUILD_WORK_DIR}" == "${TMP_DIR}/create-claster-deb."* ]]; then
         rm -rf -- "${BUILD_WORK_DIR}"
     fi
 }
@@ -907,8 +928,70 @@ readonly done_marker="${state_dir}/${plan_id}.done"
 readonly cluster_marker="${state_dir}/${plan_id}.cluster-created"
 readonly data_moved_marker="${state_dir}/${plan_id}.data-moved"
 readonly packaged_backup="${creator_dir}/package-data/${backup_name}"
+readonly force_install="${CLASTER_FORCE_INSTALL:-0}"
+readonly force_db_install="${CLASTER_FORCE_DB_INSTALL:-0}"
 mkdir -p -- "${state_dir}"
-[[ -e "${done_marker}" ]] && exit 0
+if [[ "${force_install}" == 1 && "${force_db_install}" == 1 ]]; then
+    printf 'ОШИБКА: CLASTER_FORCE_INSTALL и CLASTER_FORCE_DB_INSTALL нельзя использовать одновременно.\n' >&2
+    exit 2
+elif [[ "${force_install}" == 1 ]]; then
+    printf 'ПРИНУДИТЕЛЬНАЯ УСТАНОВКА: CLASTER_FORCE_INSTALL=1.\n'
+    rm -f -- "${done_marker}" "${cluster_marker}" "${data_moved_marker}"
+elif [[ "${force_db_install}" == 1 ]]; then
+    if [[ "${mode}" != 4 ]]; then
+        printf 'ОШИБКА: CLASTER_FORCE_DB_INSTALL поддерживается только пакетом режима 4.\n' >&2
+        exit 2
+    fi
+    printf 'ПРИНУДИТЕЛЬНАЯ ПЕРЕУСТАНОВКА БД: CLASTER_FORCE_DB_INSTALL=1.\n'
+    rm -f -- "${done_marker}"
+else
+    [[ -e "${done_marker}" ]] && exit 0
+fi
+
+cluster_already_exists() {
+    command -v pg_lsclusters >/dev/null 2>&1 || return 1
+    pg_lsclusters --no-header 2>/dev/null | awk \
+        -v version="${pg_version}" -v cluster="${cluster_name}" \
+        '$1 == version && $2 == cluster { found=1 } END { exit !found }'
+}
+
+remove_existing_cluster() {
+    printf 'ПРЕДУПРЕЖДЕНИЕ: кластер %s/%s будет удалён без резервной копии и развёрнут заново.\n' \
+        "${pg_version}" "${cluster_name}"
+    PGCC_ACTION=delete \
+    PGCC_PACKAGE="${server_package}" \
+    PGCC_PG_FAMILY="${pg_family}" \
+    PGCC_PG_VERSION="${pg_version}" \
+    PGCC_CLUSTER_NAME="${cluster_name}" \
+    PGCC_BACKUP_BEFORE_DELETE=no \
+        "${creator}"
+    if cluster_already_exists; then
+        printf 'ОШИБКА: кластер %s/%s остался зарегистрирован после принудительного удаления.\n' \
+            "${pg_version}" "${cluster_name}" >&2
+        exit 1
+    fi
+}
+
+case "${mode}" in
+    2|3|4)
+        if cluster_already_exists; then
+            if [[ "${force_install}" == 1 ]]; then
+                remove_existing_cluster
+            elif [[ "${force_db_install}" == 1 ]]; then
+                printf 'Кластер %s/%s сохранён; будет переустановлена только БД %s.\n' \
+                    "${pg_version}" "${cluster_name}" "${database_name}"
+                touch -- "${cluster_marker}"
+            else
+                printf 'ПРЕДУПРЕЖДЕНИЕ: кластер %s/%s уже развёрнут; действия postinst пропущены.\n' \
+                    "${pg_version}" "${cluster_name}"
+                touch -- "${done_marker}"
+                exit 0
+            fi
+        elif [[ "${force_db_install}" == 1 ]]; then
+            rm -f -- "${cluster_marker}"
+        fi
+        ;;
+esac
 
 install_cluster() {
     PGCC_ACTION=install \
@@ -1014,19 +1097,28 @@ EOF
 }
 
 install_manual_pages() {
-    local page language source_dir target_dir
-    local -a pages=(create-claster.sh.1 create-claster-backup.sh.1 create-deb.sh.1)
+    local page language source_dir target_dir packed_source
+    local -a pages=(create-claster.sh.1 create-claster-backup.sh.1 create-claster-deb.sh.1)
     for language in en ru; do
         source_dir="${SCRIPT_DIR}/man/${language}/man1"
         if [[ "${language}" == en ]]; then
             target_dir="${BUILD_ROOT}/usr/share/man/man1"
+            packed_source="${SCRIPT_DIR}/../../../share/man/man1"
         else
             target_dir="${BUILD_ROOT}/usr/share/man/ru/man1"
+            packed_source="${SCRIPT_DIR}/../../../share/man/ru/man1"
         fi
         mkdir -p -- "${target_dir}"
         for page in "${pages[@]}"; do
-            [[ -f "${source_dir}/${page}" ]] || die "не найдена man-страница ${source_dir}/${page}"
-            gzip -9n -c -- "${source_dir}/${page}" >"${target_dir}/${page}.gz"
+            if [[ -f "${source_dir}/${page}" ]]; then
+                gzip -9n -c -- "${source_dir}/${page}" >"${target_dir}/${page}.gz"
+            elif [[ -f "${packed_source}/${page}.gz" ]] && \
+                 gzip -t -- "${packed_source}/${page}.gz"; then
+                gzip -dc -- "${packed_source}/${page}.gz" | \
+                    gzip -9n -c >"${target_dir}/${page}.gz"
+            else
+                die "не найдена man-страница ${source_dir}/${page} или ${packed_source}/${page}.gz"
+            fi
             chmod 0644 "${target_dir}/${page}.gz"
         done
     done
@@ -1043,7 +1135,7 @@ build_package() {
         die "файл уже существует: ${output_file}; используйте --force для замены"
     fi
 
-    BUILD_WORK_DIR="$(mktemp -d "${TMP_DIR}/create-deb.XXXXXX")"
+    BUILD_WORK_DIR="$(mktemp -d "${TMP_DIR}/create-claster-deb.XXXXXX")"
     BUILD_ROOT="${BUILD_WORK_DIR}/rootFs"
     payload_dir="${BUILD_ROOT}${INSTALL_DIR}"
     mkdir -p -- "${payload_dir}" "${BUILD_ROOT}/usr/local/bin" "${BUILD_ROOT}/DEBIAN"
@@ -1053,6 +1145,7 @@ build_package() {
     install -m 0644 -- "${SCRIPT_DIR}/CHANGELOG.md" "${payload_dir}/CHANGELOG.md"
     install -m 0755 -- "${SCRIPT_DIR}/create-claster.sh" "${payload_dir}/create-claster.sh"
     install -m 0755 -- "${SCRIPT_DIR}/create-claster-backup.sh" "${payload_dir}/create-claster-backup.sh"
+    install -m 0755 -- "${SCRIPT_DIR}/create-claster-deb.sh" "${payload_dir}/create-claster-deb.sh"
     install -m 0644 -- "${SCRIPT_DIR}/README.md" "${payload_dir}/README.md"
     install -m 0644 -- "${SCRIPT_DIR}/TEST.md" "${payload_dir}/TEST.md"
     ln -s -- "${INSTALL_DIR}/create-claster.sh" "${BUILD_ROOT}${COMMAND_LINK}"

@@ -1,14 +1,14 @@
-.TH CREATE-DEB.SH 1 "2026-09-05" "pg_claster_creator 2.0.0" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.0.1" "Developer Commands"
 .SH NAME
-create-deb.sh \- build claster-creator Debian packages
+create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
-.B create-deb.sh
+.B create-claster-deb.sh
 .RI [ options ]
 .SH DESCRIPTION
-.B create-deb.sh
+.B create-claster-deb.sh
 builds installable Debian packages from the project source tree. It creates a
 fresh filesystem skeleton below
-.IR tmp/create-deb.XXXXXX/rootFs ,
+.IR tmp/create-claster-deb.XXXXXX/rootFs ,
 populates it, builds the package, and removes the temporary tree on exit.
 Packages are written to
 .I dist
@@ -33,6 +33,10 @@ Install the files and restore a cluster from an embedded cold backup.
 .TP
 .B 4
 Install the files, create a cluster, and restore an embedded hot database dump.
+.PP
+For modes 2 through 4, postinst first checks the exact cluster version and name.
+If that cluster is already registered, postinst prints a warning, skips the
+remaining deployment actions, and exits with status 0.
 .SH OPTIONS
 .TP
 .BR -h , " --help"
@@ -96,6 +100,27 @@ Disable prompts and require complete arguments.
 .TP
 .BR -f , " --force"
 Replace an existing output package.
+.SH PACKAGE INSTALLATION ENVIRONMENT
+.TP
+.B CLASTER_FORCE_INSTALL=1
+For modes 2 through 4, ignore previous completion markers, remove an existing
+target cluster without creating a backup, verify its removal, and execute the
+complete package plan again. This is the force option used for a mode 3 cold
+restore.
+.TP
+.B CLASTER_FORCE_DB_INSTALL=1
+Mode 4 only. Keep the existing cluster and restore the target database again
+from the embedded hot dump with overwrite enabled. If the cluster does not
+exist, it is created normally. This flag is rejected for modes 2 and 3.
+.PP
+The two force variables are mutually exclusive. Set them in the environment of
+.BR dpkg (1),
+for example:
+.PP
+.nf
+CLASTER_FORCE_INSTALL=1 dpkg -i PACKAGE.deb
+CLASTER_FORCE_DB_INSTALL=1 dpkg -i PACKAGE.deb
+.fi
 .SH PACKAGE NAMES
 .nf
 claster-creator-VERSION.deb
@@ -105,21 +130,25 @@ claster-creator-VERSION-PG-PGVER-CLUSTER-DATABASE.deb
 .fi
 .SH FILES
 .TP
+.I /usr/local/share/pg_claster_creator/create-claster-deb.sh
+Installed builder. No command symlink is created in
+.IR /usr/local/bin .
+.TP
 .I .new-claster.config
 Interactive defaults.
 .TP
-.I tmp/create-deb.XXXXXX/rootFs
+.I tmp/create-claster-deb.XXXXXX/rootFs
 Temporary package filesystem skeleton.
 .TP
 .I dist
 Default output directory.
 .SH EXAMPLES
 .nf
-\&./create-deb.sh
-\&./create-deb.sh --mode 1
-\&./create-deb.sh --mode 2 --depends postgis,pgbouncer
-\&./create-deb.sh --mode 3 --backup-dir /.postgres/backup
-\&./create-deb.sh --mode 4 --non-interactive \
+\&./create-claster-deb.sh
+\&./create-claster-deb.sh --mode 1
+\&./create-claster-deb.sh --mode 2 --depends postgis,pgbouncer
+\&./create-claster-deb.sh --mode 3 --backup-dir /.postgres/backup
+\&./create-claster-deb.sh --mode 4 --non-interactive \
   --pg-family postgrespro-ent --pg-version 16 \
   --cluster-name subsys --database asvd \
   --backup-file /.postgres/backup/16-asvd-20260905-105802-dmp.tar.gz

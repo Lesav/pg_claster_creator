@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-05" "pg_claster_creator 2.0.0" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-06" "pg_claster_creator 2.0.1" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -26,8 +26,13 @@ environment variable disables prompts and requires all action-specific values.
 .SH ACTIONS
 .TP
 .B info
-Display registered clusters using
-.BR pg_lsclusters (1).
+In interactive mode, display a numbered list of registered clusters. After an
+online cluster is selected, display a numbered list of all its databases,
+including templates, and the size of each database. A stopped cluster is not
+started automatically.
+Non-interactive mode prints the
+.BR pg_lsclusters (1)
+table without prompting for a selection.
 .TP
 .B install
 Create a cluster, database, schema, application roles, and systemd unit.
@@ -154,7 +159,12 @@ and
 .SH FILES
 .TP
 .I /usr/local/share/pg_claster_creator/.new-claster.config
-Persistent defaults.
+Persistent defaults. The script first looks for
+.I .new-claster.config
+next to the invoked file. If it is absent, the script checks
+.I ../share/pg_claster_creator/.new-claster.config
+relative to the script directory. This supports invocation through
+.IR /usr/local/bin/create-claster.sh .
 .TP
 .I /.postgres
 Service filesystem and default backup hierarchy.
