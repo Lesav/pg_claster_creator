@@ -9,15 +9,20 @@
 #   PostgreSQL clusters on Astra Linux and compatible Debian-based systems.
 #   The script supports PostgreSQL, Postgres Pro Enterprise, and Tantor Free.
 #   It can run as an interactive menu or as a fully non-interactive command.
+#   Every newly created backup contains a commented, shell-safe command that
+#   rebuilds the corresponding mode 3 or mode 4 Debian package non-interactively.
 #
 # Actions accepted by --action / PGCC_ACTION:
 #   info       Display registered clusters using pg_lsclusters.
-#   install    Install and initialize a new cluster and application roles.
+#   install    Install and initialize a new cluster and application roles. In
+#              non-interactive mode, a conflicting requested port is replaced
+#              by the next free port and reported with a port-change command.
 #   port       Change the TCP port of an existing cluster.
 #   move-data  Move a cluster data directory to a default or custom location.
 #   backup     Create a cold cluster backup or a hot database backup.
 #   restore    Restore a cold cluster backup or a hot database dump.
-#   delete     Delete a cluster; interactive mode can also delete a database.
+#   delete     Delete a cluster or, interactively, one database. The menu offers
+#              a cold cluster backup or hot database backup before deletion.
 #
 # Command-line options:
 #   -h, --help                         Print detailed usage information.
@@ -38,7 +43,7 @@
 #       --database NAME                Select a database for hot backup/restore.
 #       --backup-before-delete YES|NO  Control backup before cluster deletion.
 #       --clear-wal YES|NO             Control emergency WAL reset before backup.
-#       --overwrite YES|NO             Allow replacement during hot restore.
+#       --overwrite YES|NO             Allow drop/recreate during hot restore.
 #
 # Positional arguments:
 #   The backup and delete actions additionally accept VERSION CLUSTER after the
@@ -63,7 +68,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.0.2"
+readonly SCRIPT_VERSION="2.1.0"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly LOCAL_CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
@@ -154,6 +159,9 @@ usage() {
 Без ключей сценарий работает интерактивно. Если указано действие через
 --action или PGCC_ACTION, меню и подтверждения отключаются. Недостающий
 обязательный параметр в таком режиме считается ошибкой.
+При неинтерактивном install занятый порт автоматически заменяется первым
+следующим свободным; предупреждение показывает фактический порт и команду
+для его последующей смены.
 
 Общие ключи:
   -h, --help                         Показать эту справку и выйти
@@ -174,7 +182,8 @@ usage() {
       --database ИМЯ                 База для горячего backup/restore
       --backup-before-delete ДА|НЕТ  Создать бэкап перед delete; по умолчанию да
       --clear-wal ДА|НЕТ              Выполнить pg_resetwal перед бэкапом; по умолчанию нет
-      --overwrite ДА|НЕТ              Очистить существующую БД при горячем restore
+      --overwrite ДА|НЕТ              Удалить и заново создать существующую БД
+                                      при горячем restore
 
 Для backup и delete поддерживается форма pg_ctlcluster: два позиционных
 аргумента ВЕРСИЯ КЛАСТЕР после действия, например: backup 16 subsys.
@@ -911,6 +920,48 @@ tcp_port_listening() {
     '
 }
 
+cluster_using_port() {
+    local port="$1"
+    cluster_rows | awk -v p="${port}" \
+        '$3 == p && found == "" {found=$1 "/" $2} END {if (found != "") print found}'
+}
+
+find_free_cluster_port() {
+    local requested="$1" first candidate
+    first=$((10#${requested} + 1))
+    ((first < 1024)) && first=1024
+    for ((candidate = first; candidate <= 65535; candidate += 1)); do
+        if ! port_in_use "${candidate}" && ! tcp_port_listening "${candidate}"; then
+            printf '%s' "${candidate}"
+            return 0
+        fi
+    done
+    for ((candidate = 1024; candidate < first && candidate <= 65535; candidate += 1)); do
+        ((candidate == 10#${requested})) && continue
+        if ! port_in_use "${candidate}" && ! tcp_port_listening "${candidate}"; then
+            printf '%s' "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+select_noninteractive_install_port() {
+    local requested="${cls_pt}" conflict="" free_port
+    if port_in_use "${requested}"; then
+        conflict="кластером $(cluster_using_port "${requested}")"
+    elif tcp_port_listening "${requested}"; then
+        conflict="другим процессом"
+    else
+        return 0
+    fi
+    free_port="$(find_free_cluster_port "${requested}")" || die \
+        "не найден свободный TCP-порт для кластера ${pg_ver}/${cls_nm}"
+    cls_pt="${free_port}"
+    warn "порт ${requested} уже используется ${conflict}; для кластера ${pg_ver}/${cls_nm} выбран свободный порт ${cls_pt}"
+    warn "проверьте назначение порта; изменить его можно командой: ${SCRIPT_NAME} --action port --pg-version ${pg_ver} --cluster-name ${cls_nm} --port СВОБОДНЫЙ_ПОРТ"
+}
+
 print_clusters_numbered() {
     local -a rows=()
     mapfile -t rows < <(cluster_rows)
@@ -950,6 +1001,14 @@ data_directory_available() {
     [[ ! -e "${directory}" && ! -L "${directory}" ]] && return 0
     [[ -d "${directory}" ]] || return 1
     [[ -z "$(find "${directory}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]
+}
+
+ensure_data_base_directory() {
+    local directory="$1"
+    mkdir -p -- "${directory}" || die \
+        "не удалось создать каталог размещения данных ${directory}"
+    [[ -d "${directory}" ]] || die \
+        "путь размещения данных ${directory} не является каталогом"
 }
 
 prompt_value() {
@@ -1150,6 +1209,7 @@ cluster_name = '%v/%c'
 log_line_prefix = '%%m [%%p] %%q%%u@%%d '
 add_include_dir = 'conf.d'
 EOF
+    ensure_data_base_directory "${DATA_BASE}"
     mkdir -p -- "${data_dir}" /var/log/postgresql
     chown -R postgres:postgres "${data_dir}"
     run_parsec_aware pg_createcluster "${pg_ver}" "${cls_nm}" -p "${cls_pt}" --start-conf=auto \
@@ -1236,7 +1296,7 @@ install_menu() {
         validate_identifier "${cls_us}" || die "недопустимое имя пользователя: ${cls_us}"
         [[ -n "${cls_pw}" ]] || die "пароль пользователя не может быть пустым"
         cluster_exists "${pg_ver}" "${cls_nm}" && die "кластер ${pg_ver}/${cls_nm} уже развёрнут"
-        port_in_use "${cls_pt}" && die "порт ${cls_pt} уже назначен развёрнутому кластеру"
+        select_noninteractive_install_port
         data_directory_available "${DATA_BASE}/${cls_nm}" || \
             die "каталог ${DATA_BASE}/${cls_nm} уже существует и не пуст либо не является каталогом"
         printf '\nПараметры:\n  пакет: %s\n  версия: %s\n  порт: %s\n  кластер: %s\n  каталог данных: %s\n  схема/владелец: %s\n  пользователь: %s\n' \
@@ -1470,7 +1530,7 @@ move_cluster_data_menu() {
         printf 'Остановка кластера %s/%s...\n' "${version}" "${name}"
         stop_cluster_checked "${version}" "${name}"
     fi
-    mkdir -p -- "${target_base}"
+    ensure_data_base_directory "${target_base}"
     if [[ -d "${target_data}" ]]; then
         rmdir -- "${target_data}" || die "не удалось удалить пустой целевой каталог ${target_data}"
     fi
@@ -1644,15 +1704,63 @@ write_database_inventory_metadata() {
 
 write_common_backup_metadata() {
     local backup_type="$1" version="$2" cluster="$3" port="$4" version_text="$5"
+    local backup_family="${6:-${pg}}"
     printf 'backup_format=2\n'
     printf 'backup_type=%q\n' "${backup_type}"
     printf 'created_at=%q\n' "$(date --iso-8601=seconds)"
     printf 'host_name=%q\n' "$(hostname)"
-    printf 'pg_family=%q\n' "${pg}"
+    printf 'pg_family=%q\n' "${backup_family}"
     printf 'pg_version=%q\n' "${version}"
     printf 'postgres_version_text=%q\n' "${version_text}"
     printf 'cluster_name=%q\n' "${cluster}"
     printf 'cluster_port=%q\n' "${port}"
+}
+
+cluster_server_package() {
+    local version="$1" home="$2" data="$3" package
+    if [[ "${home}" == /opt/tantor/* || "${data}" == /var/lib/postgresql/tantor-free-* ]]; then
+        package="tantor-free-server-${version}-server"
+        package_installed "${package}" || package="tantor-free-server-${version}"
+    elif [[ "${home}" == /opt/pgpro/* ]]; then
+        package="postgrespro-ent-${version}-server"
+    else
+        package="postgresql-${version}-server"
+    fi
+    printf '%s' "${package}"
+}
+
+cluster_data_root_for_builder() {
+    local version="$1" cluster="$2" data="$3" suffix root
+    suffix="/pg_${version}/${cluster}"
+    [[ "${data}" == *"${suffix}" ]] || return 1
+    root="${data%"${suffix}"}"
+    printf '%s' "${root:-/}"
+}
+
+write_deb_rebuild_command() {
+    local mode="$1" family="$2" version="$3" package="$4" cluster="$5"
+    local port="$6" data="$7" archive="$8" database="${9:-}" data_root=""
+    archive="$(realpath -ms -- "${archive}")"
+    data_root="$(cluster_data_root_for_builder "${version}" "${cluster}" "${data}" || true)"
+
+    printf '# ./create-claster-deb.sh \\\n'
+    printf '#   --mode %q \\\n' "${mode}"
+    printf '#   --non-interactive \\\n'
+    printf '#   --pg-family %q \\\n' "${family}"
+    printf '#   --pg-version %q \\\n' "${version}"
+    printf '#   --package %q \\\n' "${package}"
+    printf '#   --cluster-name %q \\\n' "${cluster}"
+    printf '#   --port %q \\\n' "${port}"
+    if [[ -n "${data_root}" ]]; then
+        printf '#   --data-root %q \\\n' "${data_root}"
+    fi
+    printf '#   --backup-file %q' "${archive}"
+    if [[ -n "${database}" ]]; then
+        printf ' \\\n'
+        printf '#   --database %q\n' "${database}"
+    else
+        printf '\n'
+    fi
 }
 
 write_hot_database_metadata() {
@@ -1850,6 +1958,40 @@ create_database() {
         "не удалось создать базу данных ${database}"
 }
 
+database_owner() {
+    local home="$1" socket_dir="$2" port="$3" database="$4" escaped owner
+    validate_database_name "${database}" || die "недопустимое имя базы данных: ${database}"
+    escaped="${database//\'/\'\'}"
+    owner="$(
+        runuser -u postgres -- "${home}/bin/psql" -h "${socket_dir}" -p "${port}" \
+            -d postgres -Atqc \
+            "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='${escaped}'"
+    )" || die "не удалось определить владельца базы данных ${database}"
+    [[ -n "${owner}" ]] || die "база данных ${database} отсутствует"
+    validate_database_name "${owner}" || die \
+        "владелец базы данных ${database} имеет неподдерживаемое имя: ${owner}"
+    printf '%s' "${owner}"
+}
+
+replace_database_for_restore() {
+    local home="$1" socket_dir="$2" port="$3" database="$4" owner="$5"
+    validate_database_name "${database}" || die "недопустимое имя базы данных: ${database}"
+    case "${database}" in
+        postgres|template0|template1)
+            die "служебную базу ${database} нельзя заменить при горячем restore"
+            ;;
+    esac
+    validate_database_name "${owner}" || die "недопустимое имя роли-владельца: ${owner}"
+    [[ -x "${home}/bin/dropdb" ]] || die "не найден ${home}/bin/dropdb"
+    [[ -x "${home}/bin/createdb" ]] || die "не найден ${home}/bin/createdb"
+    printf 'Удаление существующей базы данных %s...\n' "${database}"
+    runuser -u postgres -- "${home}/bin/dropdb" --force \
+        --host="${socket_dir}" --port="${port}" --username=postgres -- "${database}" || die \
+        "не удалось удалить существующую базу данных ${database}"
+    printf 'Повторное создание базы данных %s с владельцем %s...\n' "${database}" "${owner}"
+    create_database "${home}" "${socket_dir}" "${port}" "${database}" "${owner}"
+}
+
 role_exists() {
     local home="$1" socket_dir="$2" port="$3" role="$4" escaped
     escaped="${role//\'/\'\'}"
@@ -2039,6 +2181,7 @@ make_cold_backup() {
     local version="$1" name="$2" port="$3" status="$4" owner="$5" data="$6" log="$7"
     local restart_after="${8:-no}" was_online=no
     local home reset_tool service_file archive timestamp meta_tmp rel cluster_package version_text
+    local backup_family
     local socket_dir metadata_started=no
     local -a paths=()
     prepare_backup_directory write
@@ -2090,19 +2233,17 @@ make_cold_backup() {
     [[ -n "${service_file}" ]] && paths+=("${service_file#/}")
     ((${#paths[@]})) || die "нечего помещать в резервную копию"
 
-    if [[ "${data}" == /var/lib/postgresql/tantor-free-* ]]; then
-        cluster_package="tantor-free-server-${version}-server"
-        package_installed "${cluster_package}" || cluster_package="tantor-free-server-${version}"
-    elif [[ "${home}" == /opt/pgpro/* ]]; then
-        cluster_package="postgrespro-ent-${version}-server"
-    else
-        cluster_package="postgresql-${version}-server"
-    fi
+    cluster_package="$(cluster_server_package "${version}" "${home}" "${data}")"
+    IFS='|' read -r backup_family _ < <(package_to_fields "${cluster_package}") || die \
+        "не удалось определить семейство серверного пакета ${cluster_package}"
     version_text="$("${home}/bin/postgres" --version)"
     CLEANUP_DIR="$(mktemp -d /tmp/create-claster.backup.XXXXXX)"
     meta_tmp="${CLEANUP_DIR}"
     {
-        write_common_backup_metadata cold "${version}" "${name}" "${port}" "${version_text}"
+        write_deb_rebuild_command 3 "${backup_family}" "${version}" "${cluster_package}" \
+            "${name}" "${port}" "${data}" "${archive}"
+        write_common_backup_metadata cold "${version}" "${name}" "${port}" "${version_text}" \
+            "${backup_family}"
         printf 'package=%q\n' "${cluster_package}"
         printf 'cluster_owner=%q\n' "${owner}"
         printf 'data_dir=%q\n' "${data}"
@@ -2128,6 +2269,7 @@ make_hot_backup() {
     local version="$1" cluster="$2" port="$3" status="$4" data="$5" database="$6"
     local database_verified="${7:-no}"
     local home socket_dir timestamp archive dump_name stage version_text database_number database_index archive_mode
+    local cluster_package backup_family
     prepare_backup_directory write
     [[ "${status}" == online* ]] || die "для горячего бэкапа кластер ${version}/${cluster} должен быть запущен"
     validate_database_name "${database}" || die "недопустимое имя базы данных: ${database}"
@@ -2159,9 +2301,17 @@ make_hot_backup() {
     database_index=$((database_number - 1))
     load_hot_backup_roles "${home}" "${socket_dir}" "${port}" "${database}" || die \
         "не удалось получить роли базы данных ${database}"
+    cluster_package="$(cluster_server_package "${version}" "${home}" "${data}")"
+    IFS='|' read -r backup_family _ < <(package_to_fields "${cluster_package}") || die \
+        "не удалось определить семейство серверного пакета ${cluster_package}"
     version_text="$("${home}/bin/postgres" --version)"
     {
-        write_common_backup_metadata hot "${version}" "${cluster}" "${port}" "${version_text}"
+        write_deb_rebuild_command 4 "${backup_family}" "${version}" "${cluster_package}" \
+            "${cluster}" "${port}" "${data}" "${archive}" "${database}"
+        write_common_backup_metadata hot "${version}" "${cluster}" "${port}" "${version_text}" \
+            "${backup_family}"
+        printf 'package=%q\n' "${cluster_package}"
+        printf 'data_dir=%q\n' "${data}"
         write_hot_database_metadata "${database}" "${database_index}"
         write_hot_backup_role_metadata
     } >"${stage}/backup-info.env"
@@ -2379,6 +2529,14 @@ delete_database_menu() {
         pause
         return 0
     fi
+    if confirm "Сделать горячий бэкап базы ${database} перед удалением?" Y; then
+        make_hot_backup "${version}" "${name}" "${port}" "${status}" "${data}" \
+            "${database}" yes
+    elif ! confirm "Удалить базу ${database} БЕЗ резервной копии?" N; then
+        warn "удаление базы данных отменено"
+        pause
+        return 0
+    fi
     confirm "Удалить базу ${database} из кластера ${version}/${name}? Все данные БД будут потеряны" N || {
         warn "удаление базы данных отменено"
         pause
@@ -2414,7 +2572,7 @@ delete_menu() {
 restore_hot_backup() {
     local archive="$1" filename source_version source_database timestamp dump_name
     local row version name port status owner data log home socket_dir target_database stage metadata_file=""
-    local create_target_database=no
+    local create_target_database=no target_database_owner=""
     filename="${archive##*/}"
     if [[ "${filename}" =~ ^([0-9]+)-([A-Za-z0-9_][A-Za-z0-9_.-]*)-([0-9]{8})-([0-9]{6})-dmp\.tar\.gz$ ]]; then
         source_version="${BASH_REMATCH[1]}"
@@ -2470,6 +2628,19 @@ restore_hot_backup() {
     else
         printf 'Цель: кластер %s/%s, существующая база %s, порт %s\n' \
             "${version}" "${name}" "${target_database}" "${port}"
+        case "${target_database}" in
+            postgres|template0|template1)
+                if ((NON_INTERACTIVE)); then
+                    die "служебную базу ${target_database} нельзя заменить при горячем restore"
+                fi
+                warn "служебную базу ${target_database} нельзя заменить при горячем restore"
+                pause
+                return 0
+                ;;
+        esac
+        target_database_owner="$(database_owner \
+            "${home}" "${socket_dir}" "${port}" "${target_database}")"
+        printf 'Владелец существующей базы: %s\n' "${target_database_owner}"
     fi
     if ((NON_INTERACTIVE)) && [[ "${create_target_database}" == no ]]; then
         [[ "${OVERWRITE_EXISTING}" == yes ]] || die \
@@ -2479,7 +2650,7 @@ restore_hot_backup() {
     elif [[ "${create_target_database}" == yes ]]; then
         confirm "Создать базу ${target_database} и восстановить горячий бэкап?" Y || return 0
     else
-        confirm "Очистить существующие объекты и восстановить горячий бэкап?" N || return 0
+        confirm "Удалить существующую БД, создать её заново и восстановить горячий бэкап?" N || return 0
     fi
 
     validate_hot_backup_archive_contents "${archive}" "${dump_name}"
@@ -2498,26 +2669,24 @@ restore_hot_backup() {
     [[ -f "${stage}/${dump_name}" && ! -L "${stage}/${dump_name}" ]] || die \
         "извлечённый дамп не является обычным файлом"
     chown -R postgres:postgres "${stage}"
+    "${home}/bin/pg_restore" --list "${stage}/${dump_name}" >/dev/null || die \
+        "не удалось прочитать оглавление горячего дампа"
     ensure_restore_roles "${home}" "${socket_dir}" "${port}" "${stage}/${dump_name}" "${metadata_file}"
     if [[ "${create_target_database}" == yes ]]; then
         printf 'Создание базы данных %s в кластере %s/%s...\n' \
             "${target_database}" "${version}" "${name}"
         create_database "${home}" "${socket_dir}" "${port}" "${target_database}" \
             "${RESTORE_ADMIN_ROLE:-postgres}"
+    else
+        replace_database_for_restore "${home}" "${socket_dir}" "${port}" \
+            "${target_database}" "${target_database_owner}"
     fi
     printf 'Восстановление базы %s в кластере %s/%s...\n' \
         "${target_database}" "${version}" "${name}"
-    if [[ "${create_target_database}" == yes ]]; then
-        runuser -u postgres -- "${home}/bin/pg_restore" --verbose --exit-on-error \
-            --host="${socket_dir}" --port="${port}" --dbname="${target_database}" \
-            "${stage}/${dump_name}" || die \
-            "не удалось восстановить горячий бэкап в базу ${target_database}"
-    else
-        runuser -u postgres -- "${home}/bin/pg_restore" --verbose --exit-on-error \
-            --clean --if-exists --host="${socket_dir}" --port="${port}" \
-            --dbname="${target_database}" "${stage}/${dump_name}" || die \
-            "не удалось восстановить горячий бэкап в базу ${target_database}"
-    fi
+    runuser -u postgres -- "${home}/bin/pg_restore" --verbose --exit-on-error \
+        --host="${socket_dir}" --port="${port}" --dbname="${target_database}" \
+        "${stage}/${dump_name}" || die \
+        "не удалось восстановить горячий бэкап в базу ${target_database}"
     rm -rf -- "${stage}"
     CLEANUP_DIR=""
     printf 'Горячий бэкап восстановлен в %s/%s, база %s.\n' \

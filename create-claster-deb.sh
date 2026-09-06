@@ -11,6 +11,11 @@
 #   output directory is requested. With no --mode argument, the script opens an
 #   interactive mode selection menu. Modes 2-4 generate an idempotent postinst deployment
 #   procedure; --mode 1 performs a direct scripts-only package build.
+#   After an interactive build is confirmed, create-claster-deb-last.sh is written
+#   next to this builder, or below ~/tmp when the script directory is not writable.
+#   The executable helper repeats the validated build without prompts.
+#   Completion markers are accepted only while the target cluster is actually
+#   registered; stale markers are cleared automatically before redeployment.
 #   Every package installs this builder below /usr/local/share/pg_claster_creator
 #   but intentionally does not create a command symlink for it in /usr/local/bin.
 #
@@ -36,7 +41,8 @@
 #       --backup-file FILE     Select a cold (mode 3) or hot (mode 4) backup.
 #       --backup-dir DIRECTORY Select the directory used by backup selection.
 #       --database NAME        Set the target database name for mode 4.
-#       --depends PACKAGES     Add comma-separated package dependencies.
+#       --depends PACKAGES     Add comma-separated package dependencies; automatic
+#                              Postgres Pro drops covered server dependencies.
 #       --output-dir DIRECTORY Set the destination directory for the DEB file.
 #   -i, --interactive          Explicitly enable the mode 2-4 configuration dialog.
 #   -n, --non-interactive      Disable prompts and require complete arguments.
@@ -62,15 +68,16 @@
 #   only CLASTER_FORCE_INSTALL.
 #
 # Output and dependencies:
-#   Every package depends on postgresql-common. Deployment modes also depend on
-#   the selected server package; Postgres Pro packages include the matching
-#   contrib dependency. Run --help for package-name patterns and examples.
+#   Every package depends on postgresql-common. Exact deployment modes depend on
+#   the selected server package and matching contrib package. Automatic Postgres
+#   Pro mode uses ordered contrib alternatives, each of which pulls its matching
+#   server; redundant covered server entries are omitted from --depends.
 # ==============================================================================
 
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.0.2"
+readonly SCRIPT_VERSION="2.1.0"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
 readonly TMP_DIR="${SCRIPT_DIR}/tmp"
@@ -93,6 +100,7 @@ PREFER_NEWEST_SERVER="no"
 FORCE_BUILD=0
 BUILD_WORK_DIR=""
 BUILD_ROOT=""
+LAST_COMMAND_TMP=""
 META_TEXT=""
 META_BACKUP_TYPE=""
 META_PG_FAMILY=""
@@ -155,7 +163,8 @@ usage() {
       --backup-dir КАТАЛОГ    Каталог выбора бэкапов; по умолчанию из конфига
       --database ИМЯ          Целевая БД для режима 4
       --depends ПАКЕТЫ        Дополнительные зависимости через запятую;
-                              ключ можно указывать несколько раз (режимы 2–4)
+                              ключ можно указывать несколько раз (режимы 2–4);
+                              server, покрытый автоальтернативой contrib, исключается
       --output-dir КАТАЛОГ    Каталог результата; по умолчанию ${SCRIPT_DIR}/dist
   -i, --interactive           Явно включить диалог режимов 2–4
   -n, --non-interactive       Отключить диалог и требовать параметры в ключах
@@ -171,7 +180,8 @@ ${CONFIG_FILE}.
 Для режима 4 с семейством postgrespro-ent и без явного --package значение
 --pg-version является минимальной версией сервера. В Depends записываются
 альтернативы contrib от PostgreSQL Pro 18 до указанной версии, новые раньше
-старых; каждый contrib устанавливает сервер той же версии.
+старых; каждый contrib устанавливает сервер той же версии. Соответствующие
+postgrespro-ent-*-server из --depends исключаются как избыточные.
 Если подходящий полный комплект уже установлен, он сохраняется. Явный --package
 отключает автоматический выбор и фиксирует точный пакет.
 
@@ -196,6 +206,13 @@ ${CONFIG_FILE}.
 Именно apt разрешает альтернативы и загружает отсутствующие зависимости.
 Один dpkg -i не скачивает серверные пакеты; после него потребовался бы apt -f install.
 
+После подтверждённой интерактивной сборки рядом со сборщиком создаётся
+исполняемый create-claster-deb-last.sh с правами 0755. Если каталог сборщика
+недоступен для записи, используется ~/tmp/create-claster-deb-last.sh, а каталог
+~/tmp при необходимости создаётся. Файл повторяет сборку без интерактива и с
+заменой прежнего результата. Ключ --non-interactive отключает его создание и
+изменение.
+
 Переменные для принудительной установки готового пакета:
   CLASTER_FORCE_INSTALL=1     Удалить существующий кластер без бэкапа и
                               выполнить полный план режимов 2, 3 или 4
@@ -206,6 +223,10 @@ ${CONFIG_FILE}.
 CLASTER_FORCE_INSTALL. Пример:
   CLASTER_FORCE_INSTALL=1 dpkg -i ./dist/ИМЯ_ПАКЕТА.deb
   CLASTER_FORCE_DB_INSTALL=1 dpkg -i ./dist/ИМЯ_ПАКЕТА.deb
+
+Маркеры завершения в /var/lib/claster-creator учитываются только при фактическом
+наличии целевого кластера. Если кластер удалён, устаревшие маркеры автоматически
+сбрасываются и postinst повторяет план развёртывания.
 EOF
 }
 
@@ -222,6 +243,12 @@ cleanup() {
     if [[ -n "${BUILD_WORK_DIR}" && -n "${TMP_DIR}" && \
           "${BUILD_WORK_DIR}" == "${TMP_DIR}/create-claster-deb."* ]]; then
         rm -rf -- "${BUILD_WORK_DIR}"
+    fi
+    if [[ -n "${LAST_COMMAND_TMP}" ]]; then
+        case "${LAST_COMMAND_TMP}" in
+            "${SCRIPT_DIR}/.create-claster-deb-last."*) rm -f -- "${LAST_COMMAND_TMP}" ;;
+            "${HOME:-/nonexistent}/tmp/.create-claster-deb-last."*) rm -f -- "${LAST_COMMAND_TMP}" ;;
+        esac
     fi
 }
 
@@ -562,6 +589,28 @@ normalize_extra_dependencies() {
     ((${#EXTRA_DEPENDENCIES[@]} > 0))
 }
 
+filter_auto_postgrespro_dependencies() {
+    local dependency version maximum="${POSTGRESPRO_MAX_AUTO_VERSION}" joined=""
+    local -a filtered=()
+    [[ "${PREFER_NEWEST_SERVER}" == yes ]] || return 0
+    ((pg_ver > maximum)) && maximum="${pg_ver}"
+    for dependency in "${EXTRA_DEPENDENCIES[@]}"; do
+        if [[ "${dependency}" =~ ^postgrespro-ent-([0-9]+)-server$ ]]; then
+            version="${BASH_REMATCH[1]}"
+            if ((version >= pg_ver && version <= maximum)); then
+                warn "дополнительная зависимость ${dependency} исключена: сервер устанавливается через соответствующую альтернативу contrib"
+                continue
+            fi
+        fi
+        filtered+=("${dependency}")
+    done
+    EXTRA_DEPENDENCIES=("${filtered[@]}")
+    if ((${#EXTRA_DEPENDENCIES[@]})); then
+        joined="$(IFS=,; printf '%s' "${EXTRA_DEPENDENCIES[*]}")"
+    fi
+    EXTRA_DEPENDENCIES_INPUT="${joined}"
+}
+
 prompt_extra_dependencies() {
     local value
     while true; do
@@ -768,6 +817,11 @@ interactive_configuration() {
     fi
     prompt_data_location || return 1
 
+    if [[ "${MODE}" == 4 && "${pg}" == postgrespro-ent && "${PACKAGE_SET}" == 0 ]]; then
+        PREFER_NEWEST_SERVER=yes
+        filter_auto_postgrespro_dependencies
+    fi
+
     printf '\nПараметры создаваемого DEB-пакета:\n'
     printf '  Режим:               %s\n' "${MODE}"
     printf '  Семейство:           %s\n' "${pg}"
@@ -842,6 +896,7 @@ validate_options() {
         if [[ "${MODE}" == 4 && "${pg}" == postgrespro-ent && "${PACKAGE_SET}" == 0 ]]; then
             PREFER_NEWEST_SERVER=yes
         fi
+        filter_auto_postgrespro_dependencies
     fi
 
     case "${MODE}" in
@@ -870,6 +925,79 @@ validate_options() {
                 die "для режима 4 требуется горячий бэкап PostgreSQL ${pg_ver}"
         fi
     fi
+}
+
+write_last_build_script() {
+    local repeat_dir repeat_file builder output_dir dependency_spec="" line i actual_mode
+    local -a lines=()
+    repeat_dir="${SCRIPT_DIR}"
+    repeat_file="${repeat_dir}/create-claster-deb-last.sh"
+    builder="${SCRIPT_DIR}/${SCRIPT_NAME}"
+    output_dir="$(realpath -m -- "${OUTPUT_DIR}")"
+
+    if [[ ! -d "${repeat_dir}" || ! -w "${repeat_dir}" || \
+          (-e "${repeat_file}" && ! -w "${repeat_file}") ]] || \
+       ! LAST_COMMAND_TMP="$(mktemp "${repeat_dir}/.create-claster-deb-last.XXXXXX" 2>/dev/null)"; then
+        LAST_COMMAND_TMP=""
+        [[ -n "${HOME:-}" && "${HOME}" == /* ]] || die \
+            "каталог сборщика недоступен для записи и не удалось определить домашний каталог"
+        repeat_dir="${HOME}/tmp"
+        repeat_file="${repeat_dir}/create-claster-deb-last.sh"
+        mkdir -p -- "${repeat_dir}" || die "не удалось создать резервный каталог ${repeat_dir}"
+        [[ -d "${repeat_dir}" ]] || die "путь ${repeat_dir} не является каталогом"
+        LAST_COMMAND_TMP="$(mktemp "${repeat_dir}/.create-claster-deb-last.XXXXXX")" || die \
+            "не удалось создать временный файл в ${repeat_dir}"
+        warn "каталог ${SCRIPT_DIR} недоступен для записи; файл повтора будет сохранён в ${repeat_dir}"
+    fi
+
+    lines+=("--mode $(printf '%q' "${MODE}")")
+    lines+=("--non-interactive")
+    if [[ "${MODE}" != 1 ]]; then
+        lines+=("--pg-family $(printf '%q' "${pg}")")
+        lines+=("--pg-version $(printf '%q' "${pg_ver}")")
+        if [[ "${PREFER_NEWEST_SERVER}" != yes ]]; then
+            lines+=("--package $(printf '%q' "${SERVER_PACKAGE}")")
+        fi
+        lines+=("--cluster-name $(printf '%q' "${cls_nm}")")
+        lines+=("--port $(printf '%q' "${cls_pt}")")
+        if [[ "${MODE}" == 2 || "${MODE}" == 4 ]]; then
+            lines+=("--schema $(printf '%q' "${cls_ch}")")
+            lines+=("--user $(printf '%q' "${cls_us}")")
+            lines+=("--password $(printf '%q' "${cls_pw}")")
+        fi
+        [[ -z "${DATA_ROOT}" ]] || lines+=("--data-root $(printf '%q' "${DATA_ROOT}")")
+        if ((${#EXTRA_DEPENDENCIES[@]})); then
+            dependency_spec="$(IFS=,; printf '%s' "${EXTRA_DEPENDENCIES[*]}")"
+            lines+=("--depends $(printf '%q' "${dependency_spec}")")
+        fi
+        [[ -z "${BACKUP_FILE}" ]] || lines+=("--backup-file $(printf '%q' "${BACKUP_FILE}")")
+        [[ "${MODE}" != 4 ]] || lines+=("--database $(printf '%q' "${DATABASE_NAME}")")
+    fi
+    lines+=("--output-dir $(printf '%q' "${output_dir}")")
+    lines+=("--force")
+
+    {
+        printf '#!/usr/bin/env bash\n\n'
+        printf '# Generated by %s %s.\n' "${SCRIPT_NAME}" "${SCRIPT_VERSION}"
+        printf '# Repeats the most recently validated DEB build without prompts.\n'
+        printf '# WARNING: modes 2 and 4 may contain the database password below.\n\n'
+        printf 'set -Eeuo pipefail\n\n'
+        printf 'exec %q' "${builder}"
+        for ((i = 0; i < ${#lines[@]}; i += 1)); do
+            line="${lines[i]}"
+            printf ' \\\n  %s' "${line}"
+        done
+        printf '\n'
+    } >"${LAST_COMMAND_TMP}"
+    chmod 0755 "${LAST_COMMAND_TMP}" || die "не удалось назначить права 755"
+    mv -f -- "${LAST_COMMAND_TMP}" "${repeat_file}" || die \
+        "не удалось записать ${repeat_file}"
+    LAST_COMMAND_TMP=""
+    chmod 0755 "${repeat_file}" || die "не удалось назначить права 755 файлу ${repeat_file}"
+    actual_mode="$(stat -c '%a' -- "${repeat_file}" 2>/dev/null || true)"
+    [[ "${actual_mode}" == 755 ]] || warn \
+        "файловая система сохранила для ${repeat_file} права ${actual_mode:-неизвестно} вместо 755"
+    printf 'Команда повторной сборки: %s\n' "${repeat_file}"
 }
 
 package_basename() {
@@ -1014,6 +1142,36 @@ readonly packaged_backup="${creator_dir}/package-data/${backup_name}"
 readonly force_install="${CLASTER_FORCE_INSTALL:-0}"
 readonly force_db_install="${CLASTER_FORCE_DB_INSTALL:-0}"
 mkdir -p -- "${state_dir}"
+
+cluster_already_exists() {
+    command -v pg_lsclusters >/dev/null 2>&1 || return 1
+    pg_lsclusters --no-header 2>/dev/null | awk \
+        -v version="${pg_version}" -v cluster="${cluster_name}" \
+        '$1 == version && $2 == cluster { found=1 } END { exit !found }'
+}
+
+cluster_current_port() {
+    command -v pg_lsclusters >/dev/null 2>&1 || return 1
+    pg_lsclusters --no-header 2>/dev/null | awk \
+        -v version="${pg_version}" -v cluster="${cluster_name}" \
+        '$1 == version && $2 == cluster && port == "" { port=$3 } END { if (port != "") print port }'
+}
+
+repeat_changed_port_notice() {
+    local actual_port
+    case "${mode}" in
+        2|4) ;;
+        *) return 0 ;;
+    esac
+    actual_port="$(cluster_current_port || true)"
+    [[ -n "${actual_port}" && "${actual_port}" != "${cluster_port}" ]] || return 0
+    printf '\nПРЕДУПРЕЖДЕНИЕ: запрошенный порт %s был занят; кластер %s/%s развёрнут на свободном порту %s.\n' \
+        "${cluster_port}" "${pg_version}" "${cluster_name}" "${actual_port}"
+    printf 'РЕКОМЕНДАЦИЯ: проверьте назначение порта; изменить его можно командой:\n'
+    printf '  create-claster.sh --action port --pg-version %s --cluster-name %s --port СВОБОДНЫЙ_ПОРТ\n' \
+        "${pg_version}" "${cluster_name}"
+}
+
 if [[ "${force_install}" == 1 && "${force_db_install}" == 1 ]]; then
     printf 'ОШИБКА: CLASTER_FORCE_INSTALL и CLASTER_FORCE_DB_INSTALL нельзя использовать одновременно.\n' >&2
     exit 2
@@ -1028,15 +1186,21 @@ elif [[ "${force_db_install}" == 1 ]]; then
     printf 'ПРИНУДИТЕЛЬНАЯ ПЕРЕУСТАНОВКА БД: CLASTER_FORCE_DB_INSTALL=1.\n'
     rm -f -- "${done_marker}"
 else
-    [[ -e "${done_marker}" ]] && exit 0
+    case "${mode}" in
+        2|3|4)
+            if cluster_already_exists; then
+                [[ -e "${done_marker}" ]] && exit 0
+            elif [[ -e "${done_marker}" || -e "${cluster_marker}" || -e "${data_moved_marker}" ]]; then
+                printf 'ПРЕДУПРЕЖДЕНИЕ: маркеры прежней установки устарели: кластер %s/%s не зарегистрирован; план будет выполнен заново.\n' \
+                    "${pg_version}" "${cluster_name}"
+                rm -f -- "${done_marker}" "${cluster_marker}" "${data_moved_marker}"
+            fi
+            ;;
+        *)
+            [[ -e "${done_marker}" ]] && exit 0
+            ;;
+    esac
 fi
-
-cluster_already_exists() {
-    command -v pg_lsclusters >/dev/null 2>&1 || return 1
-    pg_lsclusters --no-header 2>/dev/null | awk \
-        -v version="${pg_version}" -v cluster="${cluster_name}" \
-        '$1 == version && $2 == cluster { found=1 } END { exit !found }'
-}
 
 remove_existing_cluster() {
     printf 'ПРЕДУПРЕЖДЕНИЕ: кластер %s/%s будет удалён без резервной копии и развёрнут заново.\n' \
@@ -1064,6 +1228,9 @@ case "${mode}" in
                 printf 'Кластер %s/%s сохранён; будет переустановлена только БД %s.\n' \
                     "${pg_version}" "${cluster_name}" "${database_name}"
                 touch -- "${cluster_marker}"
+            elif [[ -e "${cluster_marker}" ]]; then
+                printf 'Продолжение незавершённой установки для кластера %s/%s.\n' \
+                    "${pg_version}" "${cluster_name}"
             else
                 printf 'ПРЕДУПРЕЖДЕНИЕ: кластер %s/%s уже развёрнут; действия postinst пропущены.\n' \
                     "${pg_version}" "${cluster_name}"
@@ -1088,6 +1255,11 @@ install_cluster() {
     PGCC_DB_PASSWORD="${db_password}" \
     PGCC_DATA_ROOT="${data_root}" \
         "${creator}"
+    cluster_already_exists || {
+        printf 'ОШИБКА: сценарий установки завершился без зарегистрированного кластера %s/%s.\n' \
+            "${pg_version}" "${cluster_name}" >&2
+        exit 1
+    }
     touch -- "${cluster_marker}"
 }
 
@@ -1097,6 +1269,11 @@ restore_cold_backup() {
     PGCC_CLUSTER_NAME="${cluster_name}" \
     PGCC_CLUSTER_PORT="${cluster_port}" \
         "${creator}"
+    cluster_already_exists || {
+        printf 'ОШИБКА: холодный рестори завершился без зарегистрированного кластера %s/%s.\n' \
+            "${pg_version}" "${cluster_name}" >&2
+        exit 1
+    }
 }
 
 restore_hot_backup() {
@@ -1132,7 +1309,7 @@ move_cluster_data() {
 
 case "${mode}" in
     2)
-        install_cluster
+        [[ -e "${cluster_marker}" ]] || install_cluster
         ;;
     3)
         [[ -f "${packaged_backup}" ]] || { printf 'Не найден встроенный холодный бэкап %s\n' "${packaged_backup}" >&2; exit 1; }
@@ -1155,6 +1332,16 @@ case "${mode}" in
         ;;
 esac
 
+case "${mode}" in
+    2|3|4)
+        cluster_already_exists || {
+            printf 'ОШИБКА: итоговый маркер не создан: кластер %s/%s не зарегистрирован.\n' \
+                "${pg_version}" "${cluster_name}" >&2
+            exit 1
+        }
+        ;;
+esac
+repeat_changed_port_notice
 touch -- "${done_marker}"
 exit 0
 EOF
@@ -1264,6 +1451,7 @@ build_package() {
 }
 
 main() {
+    local interactive_build=0
     handle_early_options "$@"
     load_defaults
     parse_args "$@"
@@ -1271,12 +1459,16 @@ main() {
         exec fakeroot -- "$0" "$@"
     fi
     if interactive_requested; then
+        interactive_build=1
         if ! interactive_configuration; then
             printf 'Сборка отменена.\n'
             exit 0
         fi
     fi
     validate_options
+    if ((interactive_build)); then
+        write_last_build_script
+    fi
     build_package
 }
 

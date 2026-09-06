@@ -50,7 +50,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-backup.sh"
-readonly SCRIPT_VERSION="2.0.2"
+readonly SCRIPT_VERSION="2.1.0"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
 readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"

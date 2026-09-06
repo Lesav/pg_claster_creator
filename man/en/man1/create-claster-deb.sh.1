@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.0.2" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.1.0" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -35,8 +35,19 @@ Install the files and restore a cluster from an embedded cold backup.
 Install the files, create a cluster, and restore an embedded hot database dump.
 .PP
 For modes 2 through 4, postinst first checks the exact cluster version and name.
-If that cluster is already registered, postinst prints a warning, skips the
-remaining deployment actions, and exits with status 0.
+If an unrelated cluster is already registered, postinst prints a warning, skips
+the remaining deployment actions, and exits with status 0. Completion markers
+are honored only while the target cluster is registered. If it was removed,
+stale completion and intermediate markers are cleared and deployment runs again.
+An interrupted plan with a registered cluster and an intermediate marker resumes
+the pending restore or data-movement step. A final marker is never created until
+the target cluster has been verified.
+.PP
+When an occupied requested port is replaced during mode 2 or mode 4 cluster
+creation, postinst repeats the warning after all actions, including hot restore.
+The final notice shows the actual port and a
+.B create-claster.sh --action port
+command for changing it later.
 .SH POSTGRES PRO VERSION SELECTION
 In mode 4 with
 .B postgrespro-ent
@@ -105,7 +116,8 @@ Set the application login role.
 Set the password stored in the protected deployment plan.
 .TP
 .BI "--data-root " DIRECTORY
-Set a custom cluster data root.
+Set a custom cluster data root. The package creates it during deployment when
+it does not exist.
 .TP
 .BI "--backup-file " FILE
 Select a cold backup for mode 3 or a hot backup for mode 4.
@@ -118,7 +130,8 @@ Set the target database for mode 4.
 .TP
 .BI "--depends " PACKAGES
 Add comma-separated Debian package dependencies. The option may be repeated and
-is accepted only in modes 2 through 4.
+is accepted only in modes 2 through 4. With automatic PostgreSQL Pro selection,
+server packages already covered by eligible contrib alternatives are omitted.
 .TP
 .BI "--output-dir " DIRECTORY
 Select the package destination. The default is
@@ -132,6 +145,25 @@ Disable prompts and require complete arguments.
 .TP
 .BR -f , " --force"
 Replace an existing output package.
+.SH REPEAT LAST INTERACTIVE BUILD
+After an interactive build is confirmed, the builder atomically writes
+.I create-claster-deb-last.sh
+next to itself. If that directory is not writable, it uses
+.IR ~/tmp/create-claster-deb-last.sh
+and creates
+.I ~/tmp
+when necessary.
+The file has mode 0755 and contains a complete command with
+.BR --non-interactive ,
+absolute paths, and
+.BR --force .
+The resulting mode is verified and a warning is printed when the filesystem
+does not preserve POSIX permissions.
+Running it repeats the last interactive build without prompts. A builder run
+with
+.B --non-interactive
+does not create or change this file. Mode 2 and mode 4 commands contain the
+configured database password, so access to the home directory must be restricted.
 .SH PACKAGE INSTALLATION ENVIRONMENT
 .TP
 .B CLASTER_FORCE_INSTALL=1
@@ -168,6 +200,12 @@ Installed builder. No command symlink is created in
 .TP
 .I .new-claster.config
 Interactive defaults.
+.TP
+.I create-claster-deb-last.sh
+Executable command for repeating the last confirmed interactive build, stored
+next to the builder or below
+.I ~/tmp
+when the builder directory is not writable.
 .TP
 .I tmp/create-claster-deb.XXXXXX/rootFs
 Temporary package filesystem skeleton.

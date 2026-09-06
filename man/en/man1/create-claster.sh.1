@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-06" "pg_claster_creator 2.0.2" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-06" "pg_claster_creator 2.1.0" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -35,7 +35,10 @@ Non-interactive mode prints the
 table without prompting for a selection.
 .TP
 .B install
-Create a cluster, database, schema, application roles, and systemd unit.
+Create a cluster, database, schema, application roles, and systemd unit. If the
+requested port is occupied, non-interactive mode selects the next free port and
+prints a warning with a command for changing it later. Interactive mode prompts
+for another value.
 .TP
 .B port
 Change the TCP port of an existing cluster.
@@ -51,7 +54,9 @@ Create a cold cluster archive or a hot custom-format database dump.
 Restore a cold cluster archive or a hot database dump.
 .TP
 .B delete
-Delete a cluster. Interactive mode can also delete one database.
+Delete a cluster. Interactive mode can also delete one database. Before
+deletion, the menu always offers a cold cluster backup or a hot backup of the
+selected database. Declining a backup requires separate confirmation.
 .SH OPTIONS
 .TP
 .BR -h , " --help"
@@ -92,7 +97,8 @@ Set the application login role.
 Set the application role password.
 .TP
 .BI "--data-root " DIRECTORY
-Select a custom root for cluster installation or data movement.
+Select a custom root for cluster installation or data movement. Missing root
+and pg_VERSION directories are created when deployment or movement starts.
 .TP
 .BI "--backup-dir " DIRECTORY
 Select backup storage and search directory.
@@ -117,7 +123,9 @@ Control cold backup before cluster deletion. The default is yes.
 Control emergency WAL reset before cold backup. The default is no.
 .TP
 .BI "--overwrite " YES|NO
-Permit replacement of an existing database during hot restore.
+Permit an existing user database to be dropped, recreated with its previous
+owner, and restored from scratch. The default is no. The postgres, template0,
+and template1 databases cannot be replaced.
 .SH POSITIONAL TARGET
 The
 .B backup
@@ -136,6 +144,18 @@ and metadata. Hot archives contain a custom-format dump and
 Hot metadata records database size and referenced application roles, including
 available SCRAM or MD5 password verifiers. Missing roles are created before hot
 restore; existing and system roles are not changed.
+.PP
+Each new metadata file starts with a commented, shell-escaped, non-interactive
+.B create-claster-deb.sh
+command. It rebuilds a mode 3 package from a cold archive or a mode 4 package
+from a hot archive, recording the exact server package, cluster, port, absolute
+backup path, hot database name, and a detectable custom data root.
+.PP
+When overwrite is enabled for an existing user database, the archive and dump
+catalog are validated first. Active sessions are then terminated by
+.BR "dropdb --force" ,
+the complete database is recreated with its previous owner, and pg_restore runs
+without object-by-object cleanup. This avoids failures on inherited constraints.
 .SH ENVIRONMENT
 Command-line options override the corresponding variables:
 .BR PGCC_ACTION ,
