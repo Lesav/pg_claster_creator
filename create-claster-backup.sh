@@ -41,6 +41,8 @@
 #   DATABASE                Existing database name, for example asvd.
 #
 # Exit and safety rules:
+#   Configuration: prefer /usr/local/shared/pg_claster_creator/.new-claster.config;
+#   only if absent, read .new-claster.config beside the resolved script.
 #   Help and version do not require privileges. Backup, cleanup, and cron setup
 #   run as root (sudo is used when available). Concurrent runs of the same task
 #   are rejected with a per-database lock. At least the newest matching backup is
@@ -50,10 +52,16 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-backup.sh"
-readonly SCRIPT_VERSION="2.1.1"
+readonly SCRIPT_VERSION="2.1.2"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
-readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
+readonly INSTALLED_CONFIG_FILE="/usr/local/shared/pg_claster_creator/.new-claster.config"
+CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
+# Prefer the per-system configuration, even when invoked from a shared project.
+if [[ -e "${INSTALLED_CONFIG_FILE}" || -L "${INSTALLED_CONFIG_FILE}" ]]; then
+    CONFIG_FILE="${INSTALLED_CONFIG_FILE}"
+fi
+readonly CONFIG_FILE
 readonly DEFAULT_BACKUP_DIR="/.postgres/backup"
 
 BACKUP_DIR=""
@@ -93,6 +101,9 @@ usage() {
 С ключом --cron периодичность всегда запрашивается интерактивно. Если лимит не
 передан ключом, сценарий также предложит выбрать ограничение количества или
 общего размера файлов.
+
+Конфиг: /usr/local/shared/pg_claster_creator/.new-claster.config;
+при отсутствии — .new-claster.config рядом с разрешённым сценарием.
 
 Примеры:
   sudo ${SCRIPT_NAME} 16 subsys asvd
@@ -182,6 +193,9 @@ size_to_bytes() {
 }
 
 configured_backup_dir() {
+    if [[ "${CONFIG_FILE}" == "${INSTALLED_CONFIG_FILE}" && ! -r "${CONFIG_FILE}" ]]; then
+        die "приоритетный конфиг недоступен для чтения: ${CONFIG_FILE}"
+    fi
     if [[ -r "${CONFIG_FILE}" ]]; then
         (
             set +u
@@ -209,6 +223,9 @@ require_root() {
         return 0
     fi
     command -v sudo >/dev/null 2>&1 || die "требуются права root; sudo не найден"
+    if [[ ! -t 0 || ! -t 2 ]]; then
+        exec sudo -n -- "$0" "$@"
+    fi
     exec sudo -- "$0" "$@"
 }
 

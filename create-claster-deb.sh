@@ -50,7 +50,9 @@
 #
 # Arguments and interactive defaults:
 #   Positional arguments are not accepted. PostgreSQL, cluster, role, password,
-#   and backup-directory defaults are loaded from .new-claster.config. In modes
+#   and backup-directory defaults are loaded first from
+#   /usr/local/shared/pg_claster_creator/.new-claster.config, otherwise from
+#   .new-claster.config beside the resolved script. In modes
 #   3 and 4, the interactive dialog lists backups by number, detects hot/cold
 #   type, shows the aligned archive size obtained via stat without opening the
 #   archive, reads backup-info.env without executing it, and lets the operator
@@ -78,9 +80,16 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.1.1"
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-readonly CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
+readonly SCRIPT_VERSION="2.1.2"
+readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
+readonly INSTALLED_CONFIG_FILE="/usr/local/shared/pg_claster_creator/.new-claster.config"
+CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
+# Use the same configuration priority as the cluster and backup commands.
+if [[ -e "${INSTALLED_CONFIG_FILE}" || -L "${INSTALLED_CONFIG_FILE}" ]]; then
+    CONFIG_FILE="${INSTALLED_CONFIG_FILE}"
+fi
+readonly CONFIG_FILE
 readonly TMP_DIR="${SCRIPT_DIR}/tmp"
 readonly INSTALL_DIR="/usr/local/share/pg_claster_creator"
 readonly COMMAND_LINK="/usr/local/bin/create-claster.sh"
@@ -173,6 +182,8 @@ usage() {
 
 Значения по умолчанию для PostgreSQL и кластера читаются из
 ${CONFIG_FILE}.
+Приоритет: /usr/local/shared/pg_claster_creator/.new-claster.config;
+при отсутствии — .new-claster.config рядом с разрешённым сценарием.
 Без --mode сначала выводится интерактивный список режимов. В режимах 2–4
 диалог включён по умолчанию. Для автоматизации используется --non-interactive.
 В диалоге выбирается бэкап, рядом с типом показывается выровненный размер
@@ -430,7 +441,8 @@ select_backup_interactive() {
     }
     while IFS= read -r selected; do
         backup_filename_supported "${selected}" && backups+=("${selected}")
-    done < <(find -H "${BACKUP_DIR}" -maxdepth 1 -type f -name '*.tar.gz' -print 2>/dev/null | sort -r)
+    # Include links to archive files; exclude broken links and directories.
+    done < <(find -L "${BACKUP_DIR}" -maxdepth 1 -type f -name '*.tar.gz' -print 2>/dev/null | sort -r)
     ((${#backups[@]})) || {
         warn "в ${BACKUP_DIR} нет поддерживаемых бэкапов"
         return 1

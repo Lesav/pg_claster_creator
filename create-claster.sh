@@ -61,22 +61,24 @@
 #   PGCC_CLEAR_WAL, and PGCC_OVERWRITE mirror the command-line options.
 #
 # Configuration:
-#   Defaults are loaded from .new-claster.config located next to this script. If
-#   that file is absent, ../share/pg_claster_creator/.new-claster.config relative
-#   to the invoked script is used (the layout installed by the Debian package).
+#   Defaults are loaded from /usr/local/shared/pg_claster_creator/.new-claster.config
+#   when it exists; otherwise .new-claster.config beside the resolved script is
+#   used. Saves update the selected file, never both. An unreadable preferred
+#   file is an error, not a reason to fall back to the project configuration.
 #   Command-line arguments override environment variables, and environment
 #   variables override configuration defaults. Run --help for complete examples.
 # ==============================================================================
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.1.1"
+readonly SCRIPT_VERSION="2.1.2"
 readonly SCRIPT_NAME="create-claster.sh"
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
 readonly LOCAL_CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
-readonly INSTALLED_CONFIG_FILE="$(realpath -m -- "${SCRIPT_DIR}/../share/pg_claster_creator/.new-claster.config")"
+readonly INSTALLED_CONFIG_FILE="/usr/local/shared/pg_claster_creator/.new-claster.config"
 CONFIG_FILE="${LOCAL_CONFIG_FILE}"
-if [[ ! -r "${CONFIG_FILE}" && -r "${INSTALLED_CONFIG_FILE}" ]]; then
+if [[ -e "${INSTALLED_CONFIG_FILE}" || -L "${INSTALLED_CONFIG_FILE}" ]]; then
     CONFIG_FILE="${INSTALLED_CONFIG_FILE}"
 fi
 readonly CONFIG_FILE
@@ -166,6 +168,9 @@ usage() {
 для его последующей смены.
 Размеры БД и каталогов данных показываются в выровненном поле шириной девять
 символов: две цифры после точки, пробел и двухбуквенная единица измерения.
+
+Конфиг: сначала /usr/local/shared/pg_claster_creator/.new-claster.config,
+при отсутствии — .new-claster.config рядом с разрешённым сценарием.
 
 Общие ключи:
   -h, --help                         Показать эту справку и выйти
@@ -449,13 +454,16 @@ confirm() {
 require_root() {
     if (( EUID != 0 )); then
         command -v sudo >/dev/null 2>&1 || die "сценарий нужно запускать от root"
+        if [[ ! -t 0 || ! -t 2 || -n "${ARG_ACTION:-${PGCC_ACTION:-}}" ]]; then
+            exec sudo -n -- bash "${BASH_SOURCE[0]}" "$@"
+        fi
         exec sudo -- bash "${BASH_SOURCE[0]}" "$@"
     fi
 }
 
 load_config() {
     [[ -r "${CONFIG_FILE}" ]] || die \
-        "не найден конфиг ${LOCAL_CONFIG_FILE} или ${INSTALLED_CONFIG_FILE}"
+        "выбранный конфиг отсутствует или недоступен для чтения: ${CONFIG_FILE}"
     chmod 600 "${CONFIG_FILE}" 2>/dev/null || true
     # shellcheck source=/dev/null
     source "${CONFIG_FILE}"
@@ -663,20 +671,39 @@ vendor_service_name() {
 }
 
 unmask_vendor_service() {
-    local unit
+    local unit state status
     unit="$(vendor_service_name "$1")" || return 0
+    status=0
+    state="$(timeout 15s systemctl is-enabled "${unit}" 2>/dev/null)" || status=$?
+    ((status != 124 && status != 137)) || die "истекло время проверки службы ${unit}"
+    # A not-yet-installed or already unmasked unit needs no mutation.
+    case "${state}" in
+        masked|masked-runtime) ;;
+        enabled|enabled-runtime|disabled|static|indirect|generated|transient|linked|linked-runtime|not-found) return 0 ;;
+        '')
+            [[ "$(timeout 15s systemctl show "${unit}" -p LoadState --value 2>/dev/null)" == not-found ]] && return 0
+            die "не удалось проверить наличие службы ${unit}" ;;
+        *) die "не удалось определить состояние маски службы ${unit}: ${state}" ;;
+    esac
     printf 'Снятие маски со штатной службы %s перед установкой...\n' "${unit}"
-    systemctl unmask "${unit}" || die "не удалось снять маску со службы ${unit}"
+    timeout 30s systemctl unmask "${unit}" || die "не удалось снять маску со службы ${unit}"
 }
 
 stop_disable_vendor_service() {
-    local unit output
+    local unit output state
     unit="$(vendor_service_name "$1")" || return 0
-    if ! output="$(systemctl stop "${unit}" 2>&1)"; then
+    state="$(timeout 15s systemctl is-active "${unit}" 2>/dev/null || true)"
+    if [[ "${state}" != inactive && "${state}" != failed ]] && \
+        ! output="$(timeout 30s systemctl stop "${unit}" 2>&1)"; then
         [[ -n "${output}" ]] && printf '%s\n' "${output}" >&2
         die "не удалось остановить службу ${unit}"
     fi
-    if ! output="$(systemctl disable "${unit}" 2>&1)"; then
+    state="$(timeout 15s systemctl is-enabled "${unit}" 2>/dev/null || true)"
+    # Avoid redundant SysV synchronization on older Astra/WSL systemd.
+    if [[ "${state}" == disabled ]]; then
+        return 0
+    fi
+    if ! output="$(timeout 30s systemctl disable "${unit}" 2>&1)"; then
         [[ -n "${output}" ]] && printf '%s\n' "${output}" >&2
         die "не удалось отключить автозапуск службы ${unit}"
     fi
@@ -1217,7 +1244,8 @@ EOF
     mkdir -p -- "${data_dir}" /var/log/postgresql
     chown -R postgres:postgres "${data_dir}"
     run_parsec_aware pg_createcluster "${pg_ver}" "${cls_nm}" -p "${cls_pt}" --start-conf=auto \
-        -d "${data_dir}" -l "${data_log}" --createclusterconf="${create_conf}"
+        -d "${data_dir}" -l "${data_log}" --createclusterconf="${create_conf}" \
+        -- --auth-local=peer --auth-host="${auth_method}"
 
     mkdir -p -- "${conf_dir}/conf.d"
     cat >>"${conf_dir}/pg_hba.conf" <<EOF
@@ -1552,11 +1580,24 @@ move_cluster_data_menu() {
 }
 
 select_cluster() {
-    local prompt="$1" choice i
+    local prompt="$1" choice i listing message
     local -a rows=()
     SELECTED_CLUSTER_ROW=""
-    mapfile -t rows < <(cluster_rows)
-    ((${#rows[@]})) || return 1
+    if ! listing="$(pg_lsclusters --no-header)"; then
+        message="не удалось получить список кластеров командой pg_lsclusters; проверьте её сообщения выше"
+    elif [[ -z "${listing//[[:space:]]/}" ]]; then
+        message="развёрнутые кластеры PostgreSQL не найдены. Сначала создайте кластер (пункт 2: Кластер: Установить). Для горячего рестори требуется существующий запущенный кластер"
+    else
+        mapfile -t rows <<<"${listing}"
+    fi
+    if [[ -n "${message:-}" ]]; then
+        if ((NON_INTERACTIVE)); then
+            die "${message}"
+        fi
+        printf '\nОШИБКА: %s\n' "${message}" >&2
+        pause
+        return 1
+    fi
     if ((NON_INTERACTIVE)); then
         ((TARGET_NAME_SET)) || die "для действия ${ACTION} укажите --cluster-name или PGCC_CLUSTER_NAME"
         SELECTED_CLUSTER_ROW="$(printf '%s\n' "${rows[@]}" | awk -v v="${pg_ver}" -v n="${cls_nm}" \
@@ -1623,7 +1664,9 @@ list_supported_backup_files() {
         if backup_filename_supported "${file}"; then
             printf '%s\n' "${file}"
         fi
-    done < <(find -H "${backup_dir}" -maxdepth 1 -type f -name '*.tar.gz' -printf '%f\n' 2>/dev/null)
+    # Follow file symlinks as well as a symlink used for the backup directory.
+    # Broken links and links to directories do not satisfy -type f.
+    done < <(find -L "${backup_dir}" -maxdepth 1 -type f -name '*.tar.gz' -printf '%f\n' 2>/dev/null)
     return 0
 }
 

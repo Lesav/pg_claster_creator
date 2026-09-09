@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.1.1" "Команды разработчика"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-09" "pg_claster_creator 2.1.2" "Команды разработчика"
 .SH ИМЯ
 create-claster-deb.sh \- сборка Debian-пакетов claster-creator
 .SH СИНТАКСИС
@@ -208,7 +208,11 @@ claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-БД.deb
 не создаётся.
 .TP
 .I .new-claster.config
-Интерактивные значения по умолчанию.
+Интерактивные значения по умолчанию. Приоритет:
+.br
+.I /usr/local/shared/pg_claster_creator/.new-claster.config
+.br
+только при отсутствии используется файл рядом с разрешённым сценарием.
 .TP
 .I create-claster-deb-last.sh
 Исполняемая команда повтора последней подтверждённой интерактивной сборки рядом

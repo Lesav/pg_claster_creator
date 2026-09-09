@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-BACKUP.SH 1 "2026-09-06" "pg_claster_creator 2.1.1" "Команды пользователя"
+.TH CREATE-CLASTER-BACKUP.SH 1 "2026-09-09" "pg_claster_creator 2.1.2" "Команды пользователя"
 .SH ИМЯ
 create-claster-backup.sh \- неинтерактивный горячий бэкап и ротация архивов БД
 .SH СИНТАКСИС
@@ -64,8 +64,9 @@ create-claster-backup.sh \- неинтерактивный горячий бэк
 .IR /var/log/pg-claster-backup-*.log .
 .SH ФАЙЛЫ
 .TP
-.I /usr/local/share/pg_claster_creator/.new-claster.config
-Содержит дефолтный каталог бэкапов.
+.I /usr/local/shared/pg_claster_creator/.new-claster.config
+Содержит дефолтный каталог бэкапов. При отсутствии используется .new-claster.config
+рядом с разрешённым файлом сценария, а не в текущем рабочем каталоге.
 .TP
 .I /usr/local/bin/create-claster-backup.sh
 Установленная ссылка команды.

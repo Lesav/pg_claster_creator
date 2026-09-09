@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-06" "pg_claster_creator 2.1.1" "Команды пользователя"
+.TH CREATE-CLASTER.SH 1 "2026-09-09" "pg_claster_creator 2.1.2" "Команды пользователя"
 .SH ИМЯ
 create-claster.sh \- подготовка пакетов PostgreSQL и управление кластерами
 .SH СИНТАКСИС
@@ -183,12 +183,11 @@ template1 заменять запрещено.
 .BR PGCC_OVERWRITE .
 .SH ФАЙЛЫ
 .TP
-.I /usr/local/share/pg_claster_creator/.new-claster.config
-Постоянные значения по умолчанию. Сначала сценарий ищет
+.I /usr/local/shared/pg_claster_creator/.new-claster.config
+Приоритетный конфиг. Только при его отсутствии используется
 .I .new-claster.config
-рядом с фактически вызванным файлом. Если его нет, проверяется
-.I ../share/pg_claster_creator/.new-claster.config
-относительно каталога сценария, что поддерживает запуск через ссылку
+рядом с файлом сценария после разрешения симлинков, независимо от текущего каталога.
+Сохранение изменяет выбранный файл. Поддерживается запуск через ссылку
 .IR /usr/local/bin/create-claster.sh .
 .TP
 .I /.postgres

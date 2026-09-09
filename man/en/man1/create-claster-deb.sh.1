@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-06" "pg_claster_creator 2.1.1" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-09" "pg_claster_creator 2.1.2" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -208,7 +208,11 @@ Installed builder. No command symlink is created in
 .IR /usr/local/bin .
 .TP
 .I .new-claster.config
-Interactive defaults.
+Interactive defaults. Prefer:
+.br
+.I /usr/local/shared/pg_claster_creator/.new-claster.config
+.br
+only if absent, use the file beside the resolved script.
 .TP
 .I create-claster-deb-last.sh
 Executable command for repeating the last confirmed interactive build, stored

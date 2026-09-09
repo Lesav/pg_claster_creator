@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-BACKUP.SH 1 "2026-09-06" "pg_claster_creator 2.1.1" "User Commands"
+.TH CREATE-CLASTER-BACKUP.SH 1 "2026-09-09" "pg_claster_creator 2.1.2" "User Commands"
 .SH NAME
 create-claster-backup.sh \- create and rotate non-interactive hot database backups
 .SH SYNOPSIS
@@ -67,8 +67,9 @@ Output is appended to the matching
 .IR /var/log/pg-claster-backup-*.log .
 .SH FILES
 .TP
-.I /usr/local/share/pg_claster_creator/.new-claster.config
-Provides the default backup directory.
+.I /usr/local/shared/pg_claster_creator/.new-claster.config
+Provides the default backup directory. If absent, use .new-claster.config
+beside the resolved script, not in the current working directory.
 .TP
 .I /usr/local/bin/create-claster-backup.sh
 Installed command symlink.

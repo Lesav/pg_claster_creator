@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-06" "pg_claster_creator 2.1.1" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-09" "pg_claster_creator 2.1.2" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -183,12 +183,11 @@ and
 .BR PGCC_OVERWRITE .
 .SH FILES
 .TP
-.I /usr/local/share/pg_claster_creator/.new-claster.config
-Persistent defaults. The script first looks for
+.I /usr/local/shared/pg_claster_creator/.new-claster.config
+Preferred persistent defaults. Only if absent, the script uses
 .I .new-claster.config
-next to the invoked file. If it is absent, the script checks
-.I ../share/pg_claster_creator/.new-claster.config
-relative to the script directory. This supports invocation through
+beside the resolved script, independently of the current working directory.
+Saves update the selected file. This supports invocation through
 .IR /usr/local/bin/create-claster.sh .
 .TP
 .I /.postgres
