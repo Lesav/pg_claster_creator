@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-09" "pg_claster_creator 2.1.2" "Команды разработчика"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-09" "pg_claster_creator 2.1.3" "Команды разработчика"
 .SH ИМЯ
 create-claster-deb.sh \- сборка Debian-пакетов claster-creator
 .SH СИНТАКСИС
@@ -201,6 +201,10 @@ claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-full.deb
 claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-БД.deb
 .fi
 .SH ФАЙЛЫ
+.TP
+.I /usr/local/share/pg_claster_creator/TEST-2.1.2-journal-passed.md
+Обязательный журнал проверки, устанавливаемый во всех режимах с правами 0644.
+Версия 2.1.3 меняет упаковку и использует неизменённые результаты проверки 2.1.2.
 .TP
 .I /usr/local/share/pg_claster_creator/create-claster-deb.sh
 Установленный сборщик. Ссылка команды в

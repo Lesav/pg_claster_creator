@@ -18,6 +18,10 @@
 #   registered; stale markers are cleared automatically before redeployment.
 #   Every package installs this builder below /usr/local/share/pg_claster_creator
 #   but intentionally does not create a command symlink for it in /usr/local/bin.
+#   All modes require the explicitly selected validation journal beside the builder
+#   and install it into the same share directory with mode 0644. Missing release
+#   evidence aborts the build. Packaging-only 2.1.3 reuses the unchanged 2.1.2
+#   functional validation; it does not claim a new full test run.
 #
 # Package modes accepted by --mode:
 #   1  Install scripts, configuration, documentation, and the command symlink.
@@ -80,7 +84,10 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.1.2"
+readonly SCRIPT_VERSION="2.1.3"
+# Bump this only when a new functional validation journal is available.
+readonly TEST_JOURNAL_VERSION="2.1.2"
+readonly TEST_JOURNAL_NAME="TEST-${TEST_JOURNAL_VERSION}-journal-passed.md"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
 readonly INSTALLED_CONFIG_FILE="/usr/local/shared/pg_claster_creator/.new-claster.config"
@@ -179,6 +186,9 @@ usage() {
   -i, --interactive           Явно включить диалог режимов 2–4
   -n, --non-interactive       Отключить диалог и требовать параметры в ключах
   -f, --force                 Разрешить замену уже существующего файла пакета
+
+Для всех режимов требуется ${TEST_JOURNAL_NAME} рядом со сборщиком;
+он устанавливается в ${INSTALL_DIR}/ с правами 0644.
 
 Значения по умолчанию для PostgreSQL и кластера читаются из
 ${CONFIG_FILE}.
@@ -1435,6 +1445,8 @@ install_manual_pages() {
 build_package() {
     local package_base output_file payload_dir dependencies installed_size description
     local -a build_command=(dpkg-deb --build)
+    [[ -f "${SCRIPT_DIR}/${TEST_JOURNAL_NAME}" && -r "${SCRIPT_DIR}/${TEST_JOURNAL_NAME}" ]] || \
+        die "не найден журнал успешного тестирования версии ${TEST_JOURNAL_VERSION}: ${SCRIPT_DIR}/${TEST_JOURNAL_NAME}"
     package_base="$(package_basename)"
     mkdir -p -- "${OUTPUT_DIR}"
     OUTPUT_DIR="$(realpath -m -- "${OUTPUT_DIR}")"
@@ -1456,6 +1468,7 @@ build_package() {
     install -m 0755 -- "${SCRIPT_DIR}/create-claster-deb.sh" "${payload_dir}/create-claster-deb.sh"
     install -m 0644 -- "${SCRIPT_DIR}/README.md" "${payload_dir}/README.md"
     install -m 0644 -- "${SCRIPT_DIR}/TEST.md" "${payload_dir}/TEST.md"
+    install -m 0644 -- "${SCRIPT_DIR}/${TEST_JOURNAL_NAME}" "${payload_dir}/${TEST_JOURNAL_NAME}"
     ln -s -- "${INSTALL_DIR}/create-claster.sh" "${BUILD_ROOT}${COMMAND_LINK}"
     ln -s -- "${INSTALL_DIR}/create-claster-backup.sh" "${BUILD_ROOT}${BACKUP_COMMAND_LINK}"
     printf '%s\n' "${INSTALL_DIR}/.new-claster.config" >"${BUILD_ROOT}/DEBIAN/conffiles"
