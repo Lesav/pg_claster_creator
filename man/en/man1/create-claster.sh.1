@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-11" "pg_claster_creator 2.3.0" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-11" "pg_claster_creator 2.3.1" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -36,6 +36,10 @@ the new name across all major versions and stopping the source cluster.
 Project paths and units are updated; port, running state and boot enablement
 are preserved. Database/role names and external cron jobs are not renamed.
 Configuration and unit copies are retained in /var/tmp/pgcc-rename.* (not database data).
+.PP
+An unregistered target's inactive/failed unit with MainPID=0 does not block
+renaming: its files and links are backed up before replacement. Active units,
+unreadable state, existing configuration and data still block the operation.
 .TP
 .B info
 In interactive mode, display a numbered list of registered clusters. After an

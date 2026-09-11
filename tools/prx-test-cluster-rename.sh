@@ -14,7 +14,14 @@ for fn in rename_cluster_checked restore_target_conflict cluster_service_file re
 done
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 pg_conftool() { return 0; }
-systemctl() { printf 'systemctl %s\n' "$*" >>"$fixture/events"; return 0; }
+systemctl() {
+    if [[ "$1" == show ]]; then
+        printf 'ActiveState=%s\nMainPID=%s\n' "${mock_state:-inactive}" "${mock_pid:-0}"
+    else
+        printf 'systemctl %s\n' "$*" >>"$fixture/events"
+    fi
+    return 0
+}
 run_parsec_aware() { "$@"; }
 stop_cluster_checked() { printf 'stop %s %s\n' "$1" "$2" >>"$fixture/events"; }
 start_cluster_checked() { printf 'start %s %s\n' "$1" "$2" >>"$fixture/events"; }
@@ -35,7 +42,14 @@ printf 'ExecStart=/usr/bin/pg_ctlcluster 18-old start\n' >"$fixture/usr/lib/syst
 ! (rename_cluster_checked 18 old '../bad' "$fixture/data/old" online)
 ! (rename_cluster_checked 18 old old "$fixture/data/old" online)
 [[ ! -e "$fixture/events" ]]
+printf 'STALE TARGET UNIT\n' >"$fixture/usr/lib/systemd/system/postgresql@18-renamed.service"
+mock_state=active; mock_pid=999
+! (rename_cluster_checked 18 old renamed "$fixture/data/old" online)
+[[ ! -e "$fixture/events" ]]
+mock_state=inactive; mock_pid=0
 rename_cluster_checked 18 old renamed "$fixture/data/old" online
+grep -rq 'STALE TARGET UNIT' "$fixture/var/tmp"
+! grep -q 'STALE TARGET UNIT' "$fixture/usr/lib/systemd/system/postgresql@18-renamed.service"
 [[ -d "$fixture/data/renamed" && ! -e "$fixture/data/old" ]]
 [[ -d "$fixture/etc/postgresql/18/renamed" ]]
 [[ -f "$fixture/usr/lib/systemd/system/postgresql@18-renamed.service" ]]

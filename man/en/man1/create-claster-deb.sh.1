@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-11" "pg_claster_creator 2.3.0" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-11" "pg_claster_creator 2.3.1" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -209,8 +209,7 @@ claster-creator-VERSION-PG-PGVER-CLUSTER-DATABASE.deb
 .TP
 .I /usr/local/share/pg_claster_creator/TEST-2.1.2-journal-passed.md
 Required validation journal, installed by every package mode with permissions 0644.
-Release 2.3.0 adds cluster state control and renaming, and updates cold restore
-and the interactive DEB wizard.
+Release 2.3.1 fixes orphan-unit conflict handling during cluster renaming.
 The bundled 2.1.2 journal is historical and does not validate these new features.
 .TP
 .I /usr/local/share/pg_claster_creator/create-claster-deb.sh

@@ -76,7 +76,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.3.0"
+readonly SCRIPT_VERSION="2.3.1"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -1203,7 +1203,7 @@ cold_restore_data_path() {
 }
 
 restore_target_conflict() {
-    local version="$1" name="$2" data_dir="$3" service candidate rows existing_version
+    local version="$1" name="$2" data_dir="$3" policy="${4:-strict}" service candidate rows existing_version unit_state
     service="postgresql@${version}-${name}.service"
     rows="$(pg_lsclusters --no-header 2>/dev/null)" || {
         printf 'не удалось проверить зарегистрированные кластеры'
@@ -1213,6 +1213,15 @@ restore_target_conflict() {
     if [[ -n "${existing_version}" ]]; then
         printf 'имя кластера %s уже зарегистрировано (PostgreSQL %s); выберите другое имя независимо от версии' "${name}" "${existing_version//$'\n'/, }"
         return 0
+    fi
+    if [[ "${policy}" == rename ]]; then
+        unit_state="$(systemctl show "${service}" -p ActiveState -p MainPID 2>/dev/null)" || {
+            printf 'не удалось проверить состояние службы %s' "${service}"; return 0;
+        }
+        if ! grep -Eq '^ActiveState=(inactive|failed)$' <<<"${unit_state}" || ! grep -qx 'MainPID=0' <<<"${unit_state}"; then
+            printf 'служба %s работает или её состояние небезопасно для замены' "${service}"
+            return 0
+        fi
     fi
     for candidate in \
         "/etc/postgresql/${version}/${name}" \
@@ -1228,6 +1237,10 @@ restore_target_conflict() {
             continue
         fi
         if [[ -e "${candidate}" || -L "${candidate}" ]]; then
+            if [[ "${policy}" == rename && "${candidate}" != "${data_dir}" && "${candidate}" != "/etc/postgresql/${version}/${name}" ]]; then
+                # An unregistered, inactive unit is residue, not a name conflict.
+                continue
+            fi
             printf 'целевой путь уже существует: %s' "${candidate}"
             return 0
         fi
@@ -1606,9 +1619,9 @@ rename_cluster_checked() {
     # Name conflicts are global. An unchanged custom data directory belongs to
     # this source cluster and is not a destination collision.
     if [[ "${new_data}" == "${data}" ]]; then
-        conflict="$(restore_target_conflict "${version}" "${new_name}" "/etc/postgresql/${version}/${new_name}")" && die "${conflict}"
+        conflict="$(restore_target_conflict "${version}" "${new_name}" "/etc/postgresql/${version}/${new_name}" rename)" && die "${conflict}"
     else
-        conflict="$(restore_target_conflict "${version}" "${new_name}" "${new_data}")" && die "${conflict}"
+        conflict="$(restore_target_conflict "${version}" "${new_name}" "${new_data}" rename)" && die "${conflict}"
     fi
     conf="/etc/postgresql/${version}/${name}"
     new_conf="/etc/postgresql/${version}/${new_name}"
@@ -1639,7 +1652,20 @@ rename_cluster_checked() {
         fi
     done
     systemctl is-enabled --quiet "postgresql@${version}-${name}.service" 2>/dev/null && was_enabled=yes
+    # Preserve target-name residue as well; it will be replaced, not reused.
+    for candidate in "/etc/systemd/system/postgresql@${version}-${new_name}.service" "/usr/lib/systemd/system/postgresql@${version}-${new_name}.service" "/lib/systemd/system/postgresql@${version}-${new_name}.service" "/etc/systemd/system/multi-user.target.wants/postgresql@${version}-${new_name}.service" "/.postgres/systemd/postgresql@${version}-${new_name}.service" "/.postgres/systemd/save/postgresql@${version}-${new_name}.service"; do
+        if [[ -e "${candidate}" || -L "${candidate}" ]]; then
+            cp -a -- "${candidate}" "${recovery}/orphan-unit-${backup_index}" || die "не удалось сохранить ${candidate}"
+            printf '%s\t%s\n' "orphan-unit-${backup_index}" "${candidate}" >>"${recovery}/unit-paths.txt"
+            ((backup_index += 1))
+        fi
+    done
     printf 'Страховочная копия конфигурации и unit: %s (данные БД не копируются).\n' "${recovery}"
+    # Recheck immediately before any service or cluster changes.
+    candidate="${new_data}"
+    [[ "${new_data}" != "${data}" ]] || candidate="${new_conf}"
+    conflict="$(restore_target_conflict "${version}" "${new_name}" "${candidate}" rename)" && die "${conflict}"
+    remove_cluster_service_files "${version}" "${new_name}"
     [[ "${status}" != online* ]] || was_online=yes
     if [[ "${was_online}" == yes ]]; then stop_cluster_checked "${version}" "${name}"; fi
     if ! run_parsec_aware pg_renamecluster "${version}" "${name}" "${new_name}"; then
@@ -1695,7 +1721,7 @@ rename_cluster_menu() {
         validate_identifier "${new_name}" && ((${#new_name} <= 63)) || { warn "имя: 1–63 символа, строчные латинские буквы, цифры и подчёркивание; не начинается с цифры"; continue; }
         [[ "${new_name}" != "${name}" ]] || { warn "новое имя совпадает с текущим"; continue; }
         new_data="$(renamed_cluster_path "${data}" "${name}" "${new_name}")"
-        if conflict="$(restore_target_conflict "${version}" "${new_name}" "$([[ "${data}" == "${new_data}" ]] && printf '/etc/postgresql/%s/%s' "${version}" "${new_name}" || printf '%s' "${new_data}")")"; then
+        if conflict="$(restore_target_conflict "${version}" "${new_name}" "$([[ "${data}" == "${new_data}" ]] && printf '/etc/postgresql/%s/%s' "${version}" "${new_name}" || printf '%s' "${new_data}")" rename)"; then
             warn "${conflict}"; continue
         fi
         break
