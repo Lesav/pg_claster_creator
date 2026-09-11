@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-11" "pg_claster_creator 2.2.0" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-11" "pg_claster_creator 2.3.0" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -26,6 +26,10 @@ unit, and no more than nine characters. The size is obtained with
 .BR stat (1)
 without opening or extracting the archive.
 .SH MODES
+.PP
+Interactive steps clear the terminal. Submenus offer 0 to go back; invalid input
+returns to the previous step. Invalid main-menu input exits. Enter accepts a
+displayed default; EOF cancels the wizard without building a package.
 .TP
 .B 1
 Install management and scheduled-backup scripts, configuration, documentation,
@@ -205,7 +209,8 @@ claster-creator-VERSION-PG-PGVER-CLUSTER-DATABASE.deb
 .TP
 .I /usr/local/share/pg_claster_creator/TEST-2.1.2-journal-passed.md
 Required validation journal, installed by every package mode with permissions 0644.
-Release 2.2.0 adds Tantor SE/BE and physical backup version detection.
+Release 2.3.0 adds cluster state control and renaming, and updates cold restore
+and the interactive DEB wizard.
 The bundled 2.1.2 journal is historical and does not validate these new features.
 .TP
 .I /usr/local/share/pg_claster_creator/create-claster-deb.sh

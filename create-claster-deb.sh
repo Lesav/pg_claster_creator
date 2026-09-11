@@ -9,8 +9,10 @@
 #   the script creates a fresh root filesystem skeleton below tmp, populates it,
 #   and removes it on exit. Completed packages are written to dist unless another
 #   output directory is requested. With no --mode argument, the script opens an
-#   interactive mode selection menu. Modes 2-4 generate an idempotent postinst deployment
-#   procedure; --mode 1 performs a direct scripts-only package build.
+#   interactive mode selection menu. Modes 2-4 generate an idempotent postinst
+#   deployment procedure; --mode 1 performs a direct scripts-only package build.
+#   Interactive steps clear the terminal; invalid input goes back one step.
+#   Submenus offer 0 (back); invalid main-menu input and EOF exit without building.
 #   After an interactive build is confirmed, create-claster-deb-last.sh is written
 #   next to this builder, or below ~/tmp when the script directory is not writable.
 #   The executable helper repeats the validated build without prompts.
@@ -21,7 +23,7 @@
 #   All modes require the explicitly selected validation journal beside the builder
 #   and install it into the same share directory with mode 0644. Missing release
 #   evidence aborts the build. The 2.1.2 journal is historical; it does not
-#   validate the new 2.2.0 features. See TEST.md for the current test scope.
+#   validate the new 2.3.0 features. See TEST.md for the current test scope.
 #
 # Package modes accepted by --mode:
 #   1  Install scripts, configuration, documentation, and the command symlink.
@@ -84,7 +86,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.2.0"
+readonly SCRIPT_VERSION="2.3.0"
 # Bump this only when a new functional validation journal is available.
 readonly TEST_JOURNAL_VERSION="2.1.2"
 readonly TEST_JOURNAL_NAME="TEST-${TEST_JOURNAL_VERSION}-journal-passed.md"
@@ -155,6 +157,8 @@ usage() {
 
 Без --mode открывается интерактивный выбор режима сборки.
 Для прямой сборки пакета со сценариями используется --mode 1.
+В подменю 0 — назад; неверный ввод возвращает на предыдущий шаг.
+В главном меню 0 или неверный ввод — выход. Enter принимает показанный вариант.
 
 Режимы:
   1  Установить сценарии
@@ -365,13 +369,13 @@ warn() {
 
 prompt_value() {
     local label="$1" current="$2" value
-    read -r -p "${label} [${current}]: " value || return 1
+    read -r -p "${label} [${current}]: " value || return 2
     printf '%s' "${value:-${current}}"
 }
 
 confirm() {
     local prompt="$1" answer
-    read -r -p "${prompt} [Y/n]: " answer || return 1
+    read -r -p "${prompt} [Y/n]: " answer || return 2
     case "${answer,,}" in
         ''|y|yes|д|да) return 0 ;;
         *) return 1 ;;
@@ -469,16 +473,16 @@ select_backup_interactive() {
             size_label="$(backup_file_size_label "${backups[i]}")" || size_label='н/д'
             printf '%3d - [%s | %9s] %s\n' "$((i + 1))" "${kind_label}" "${size_label}" "${backups[i]##*/}"
         done
-        printf '  0 - Отменить сборку\n'
-        read -r -p "Выберите резервную копию: " choice || return 1
-        [[ "${choice}" =~ ^[0-9]+$ ]] || { warn "введите номер из списка"; continue; }
+        printf '  0 - Назад\n'
+        read -r -p "Выберите резервную копию: " choice || return 2
+        [[ "${choice}" =~ ^[0-9]+$ ]] || return 1
         ((choice == 0)) && return 1
-        ((choice >= 1 && choice <= ${#backups[@]})) || { warn "неверный номер"; continue; }
+        ((choice >= 1 && choice <= ${#backups[@]})) || return 1
         selected="${backups[choice-1]}"
         kind="$(backup_kind "${selected}")"
         if [[ "${kind}" != "${required_kind}" ]]; then
             warn "режим ${MODE} принимает только $(backup_kind_label "${required_kind}") бэкап"
-            continue
+            return 1
         fi
         BACKUP_FILE="$(realpath -e -- "${selected}")"
         return 0
@@ -583,12 +587,20 @@ infer_family_from_package() {
     esac
 }
 
+# Status convention for interactive steps: 0 forward, 1 back, 2 EOF/exit.
+wizard_screen() {
+    [[ ! -t 1 ]] || printf '\033[2J\033[H'
+    printf '%s, версия %s\n' "${SCRIPT_NAME}" "${SCRIPT_VERSION}"
+    printf '%s\n' '-------------------------------------------------------------------------------'
+}
+
 prompt_family() {
     local choice default_choice=1
     case "${pg}" in postgresql) default_choice=1 ;; postgrespro-ent) default_choice=2 ;; tantor-free) default_choice=3 ;; tantor-se) default_choice=4 ;; tantor-be) default_choice=5 ;; esac
     while true; do
         printf '\nСемейство PostgreSQL:\n1 - postgresql\n2 - postgrespro-ent\n3 - tantor-free\n4 - tantor-se (Special Edition)\n5 - tantor-be (Basic Edition)\n'
-        read -r -p "Выбор [${default_choice}]: " choice || return 1
+        printf '0 - Назад\n'
+        read -r -p "Выбор [${default_choice}]: " choice || return 2
         choice="${choice:-${default_choice}}"
         case "${choice}" in
             1) pg=postgresql; return 0 ;;
@@ -596,7 +608,7 @@ prompt_family() {
             3) pg=tantor-free; return 0 ;;
             4) pg=tantor-se; return 0 ;;
             5) pg=tantor-be; return 0 ;;
-            *) warn "выберите число от 1 до 5" ;;
+            *) return 1 ;;
         esac
     done
 }
@@ -604,12 +616,13 @@ prompt_family() {
 prompt_validated_value() {
     local target="$1" label="$2" current="$3" validator="$4" message="$5" value
     while true; do
-        value="$(prompt_value "${label}" "${current}")" || return 1
+        value="$(prompt_value "${label}" "${current}")" || return $?
         if "${validator}" "${value}"; then
             printf -v "${target}" '%s' "${value}"
             return 0
         fi
         warn "${message}"
+        return 1
     done
 }
 
@@ -666,7 +679,7 @@ filter_auto_postgrespro_dependencies() {
 prompt_extra_dependencies() {
     local value
     while true; do
-        value="$(prompt_value 'Дополнительные зависимости через запятую' "${EXTRA_DEPENDENCIES_INPUT:-нет}")" || return 1
+        value="$(prompt_value 'Дополнительные зависимости через запятую' "${EXTRA_DEPENDENCIES_INPUT:-нет}")" || return $?
         case "${value,,}" in
             нет|none|-) EXTRA_DEPENDENCIES_INPUT="" ;;
             *) EXTRA_DEPENDENCIES_INPUT="${value}" ;;
@@ -675,6 +688,7 @@ prompt_extra_dependencies() {
             return 0
         fi
         warn "используйте имена DEB-пакетов через запятую без условий версий"
+        return 1
     done
 }
 
@@ -696,17 +710,28 @@ custom_target_data_path() {
     fi
 }
 
+# Mirror the creator's normalization of historical standard restore roots.
+cold_target_data_path() {
+    local base="${META_DATA_DIR%/${META_CLUSTER_NAME}}"
+    if [[ "${base}" =~ ^/var/lib/postgresql/(tantor-(free|se|be)-)?[0-9]+$ ]]; then
+        default_target_data_path
+    else
+        printf '%s/%s' "${base}" "${cls_nm}"
+    fi
+}
+
 prompt_data_location() {
     local choice root default_choice=1 source_path requested_path
     if [[ "${MODE}" == 3 ]]; then
-        source_path="${META_DATA_DIR%/${META_CLUSTER_NAME}}/${cls_nm}"
+        source_path="$(cold_target_data_path)"
         ((DATA_ROOT_SET)) && default_choice=3
         while true; do
             printf '\nРазмещение восстановленного каталога данных:\n'
-            printf '1 - Исходное размещение: %s\n' "${META_DATA_DIR%/${META_CLUSTER_NAME}}/${cls_nm}"
+            printf '1 - Размещение после рестори: %s\n' "${source_path}"
             printf '2 - Дефолтное размещение выбранного сервера\n'
             printf '3 - Указать другой корневой каталог\n'
-            read -r -p "Выбор [${default_choice}]: " choice || return 1
+            printf '0 - Назад\n'
+            read -r -p "Выбор [${default_choice}]: " choice || return 2
             choice="${choice:-${default_choice}}"
             case "${choice}" in
                 1) MOVE_AFTER_RESTORE=no; DATA_ROOT=""; return 0 ;;
@@ -721,8 +746,8 @@ prompt_data_location() {
                     return 0
                     ;;
                 3)
-                    root="$(prompt_value 'Корневой каталог' "${DATA_ROOT:-/DATA}")" || return 1
-                    [[ "${root}" == /* && "${root}" != *[[:space:]]* ]] || { warn "нужен абсолютный путь без пробелов"; continue; }
+                    root="$(prompt_value 'Корневой каталог' "${DATA_ROOT:-/DATA}")" || return $?
+                    [[ "${root}" == /* && "${root}" != *[[:space:]]* ]] || { warn "нужен абсолютный путь без пробелов"; return 1; }
                     requested_path="$(custom_target_data_path "${root}")"
                     if [[ "${source_path}" == "${requested_path}" ]]; then
                         MOVE_AFTER_RESTORE=no
@@ -734,7 +759,7 @@ prompt_data_location() {
                     fi
                     return 0
                     ;;
-                *) warn "выберите 1, 2 или 3" ;;
+                *) return 1 ;;
             esac
         done
     fi
@@ -743,23 +768,24 @@ prompt_data_location() {
         printf '\nРазмещение создаваемого каталога данных:\n'
         printf '1 - Дефолтное размещение выбранного сервера\n'
         printf '2 - Указать другой корневой каталог\n'
-        read -r -p "Выбор [${default_choice}]: " choice || return 1
+        printf '0 - Назад\n'
+        read -r -p "Выбор [${default_choice}]: " choice || return 2
         choice="${choice:-${default_choice}}"
         case "${choice}" in
             1) DATA_ROOT=""; return 0 ;;
             2)
-                root="$(prompt_value 'Корневой каталог' "${DATA_ROOT:-/DATA}")" || return 1
-                [[ "${root}" == /* && "${root}" != *[[:space:]]* ]] || { warn "нужен абсолютный путь без пробелов"; continue; }
+                root="$(prompt_value 'Корневой каталог' "${DATA_ROOT:-/DATA}")" || return $?
+                [[ "${root}" == /* && "${root}" != *[[:space:]]* ]] || { warn "нужен абсолютный путь без пробелов"; return 1; }
                 DATA_ROOT="${root}"; return 0
                 ;;
-            *) warn "выберите 1 или 2" ;;
+            *) return 1 ;;
         esac
     done
 }
 
 target_data_path() {
     if [[ "${MODE}" == 3 && "${MOVE_AFTER_RESTORE}" == no ]]; then
-        printf '%s/%s' "${META_DATA_DIR%/${META_CLUSTER_NAME}}" "${cls_nm}"
+        cold_target_data_path
     elif [[ -n "${DATA_ROOT}" ]]; then
         custom_target_data_path "${DATA_ROOT}"
     else
@@ -770,8 +796,7 @@ target_data_path() {
 select_mode_interactive() {
     local choice
     while true; do
-        printf '%s, версия %s\n' "${SCRIPT_NAME}" "${SCRIPT_VERSION}"
-        printf '%s\n' '-------------------------------------------------------------------------------'
+        wizard_screen
         printf 'Выбор режима сборки DEB-пакета\n'
         printf '%s\n' '-------------------------------------------------------------------------------'
         printf '%s\n' \
@@ -784,96 +809,18 @@ select_mode_interactive() {
         case "${choice}" in
             0) return 1 ;;
             1|2|3|4) MODE="${choice}"; return 0 ;;
-            *) warn "выберите номер от 0 до 4" ;;
+            *) return 1 ;;
         esac
     done
 }
 
-interactive_configuration() {
-    local kind required_kind old_name password_value package_default selected_from_menu=no
-    if [[ -z "${MODE}" ]]; then
-        select_mode_interactive || return 1
-        selected_from_menu=yes
-    fi
-    if [[ "${selected_from_menu}" == no ]]; then
-        printf '%s, версия %s\n' "${SCRIPT_NAME}" "${SCRIPT_VERSION}"
-        printf '%s\n' '-------------------------------------------------------------------------------'
-    fi
-    printf 'Интерактивная сборка, режим %s\n' "${MODE}"
-    printf '%s\n' '-------------------------------------------------------------------------------'
-
+wizard_build_summary() {
     if [[ "${MODE}" == 1 ]]; then
-        printf '\nБудет создан пакет со сценариями, конфигурацией и документацией.\n'
+        printf 'Будет создан пакет со сценариями, конфигурацией и документацией.\n'
         printf 'Результат: %s/%s.deb\n' "${OUTPUT_DIR}" "$(package_basename)"
         confirm 'Собрать пакет режима 1?'
-        return
+        return $?
     fi
-
-    if [[ "${MODE}" == 3 || "${MODE}" == 4 ]]; then
-        if [[ "${MODE}" == 3 ]]; then required_kind=cold; else required_kind=hot; fi
-        select_backup_interactive "${required_kind}" || return 1
-        kind="$(backup_kind "${BACKUP_FILE}")"
-        read_backup_metadata "${kind}"
-        print_backup_metadata "${kind}"
-        if [[ "${MODE}" == 3 ]]; then
-            pg_ver="${META_PG_VERSION}"
-            pg="${META_PG_FAMILY:-$(infer_family_from_package "${META_PACKAGE}" || true)}"
-            SERVER_PACKAGE="${META_PACKAGE}"
-            [[ -n "${pg}" && -n "${SERVER_PACKAGE}" ]] || die "в холодном метафайле недостаточно данных о серверном пакете"
-        else
-            ((PG_VERSION_SET)) || pg_ver="${META_PG_VERSION}"
-            ((PG_FAMILY_SET)) || pg="${META_PG_FAMILY:-${pg}}"
-        fi
-        ((CLUSTER_NAME_SET)) || cls_nm="${META_CLUSTER_NAME}"
-        ((CLUSTER_PORT_SET)) || cls_pt="${META_CLUSTER_PORT}"
-        if [[ "${MODE}" == 4 ]] && ((DATABASE_SET == 0)); then
-            DATABASE_NAME="${META_DATABASE_NAME}"
-        fi
-    fi
-
-    if [[ "${MODE}" != 3 ]]; then
-        prompt_family || return 1
-        prompt_validated_value pg_ver 'Версия PostgreSQL' "${pg_ver}" validate_version 'версия должна быть целым числом' || return 1
-        if [[ "${MODE}" == 4 && "${pg_ver}" != "${META_PG_VERSION}" ]]; then
-            warn "горячий бэкап PostgreSQL ${META_PG_VERSION} нельзя развернуть в версию ${pg_ver}"
-            return 1
-        fi
-        package_default="$(default_server_package)"
-        [[ -n "${SERVER_PACKAGE}" && "${PACKAGE_SET}" == 1 ]] || SERVER_PACKAGE="${package_default}"
-        prompt_validated_value SERVER_PACKAGE 'Серверный пакет' "${SERVER_PACKAGE}" validate_package_name 'недопустимое имя пакета' || return 1
-        [[ "${SERVER_PACKAGE}" == "${package_default}" ]] || PACKAGE_SET=1
-    else
-        printf '\nВерсия и серверный пакет холодного бэкапа сохраняются без изменения:\n'
-        printf '  %s, %s, %s\n' "${pg}" "${pg_ver}" "${SERVER_PACKAGE}"
-    fi
-    prompt_extra_dependencies || return 1
-
-    old_name="${cls_nm}"
-    prompt_validated_value cls_nm 'Имя целевого кластера' "${cls_nm}" validate_identifier 'используйте строчные латинские буквы, цифры и подчёркивание' || return 1
-    prompt_validated_value cls_pt 'TCP-порт кластера' "${cls_pt}" validate_port 'порт должен быть числом от 1 до 65535' || return 1
-    if [[ "${MODE}" == 2 || "${MODE}" == 4 ]]; then
-        if [[ "${cls_nm}" != "${old_name}" ]]; then
-            ((SCHEMA_SET)) || cls_ch="${cls_nm}"
-            ((USER_SET)) || cls_us="${cls_nm}"
-            ((PASSWORD_SET)) || cls_pw="${cls_nm}"
-        fi
-        prompt_validated_value cls_ch 'Схема/роль-владелец' "${cls_ch}" validate_identifier 'недопустимое имя схемы' || return 1
-        prompt_validated_value cls_us 'Прикладной пользователь' "${cls_us}" validate_identifier 'недопустимое имя пользователя' || return 1
-        read -r -s -p 'Пароль ролей [Enter — оставить текущее значение]: ' password_value || return 1
-        printf '\n'
-        [[ -z "${password_value}" ]] || cls_pw="${password_value}"
-        [[ -n "${cls_pw}" ]] || { warn "пароль не может быть пустым"; return 1; }
-    fi
-    if [[ "${MODE}" == 4 ]]; then
-        prompt_validated_value DATABASE_NAME 'Имя целевой БД' "${DATABASE_NAME}" validate_database_name 'недопустимое имя базы данных' || return 1
-    fi
-    prompt_data_location || return 1
-
-    if [[ "${MODE}" == 4 && "${pg}" == postgrespro-ent && "${PACKAGE_SET}" == 0 ]]; then
-        PREFER_NEWEST_SERVER=yes
-        filter_auto_postgrespro_dependencies
-    fi
-
     printf '\nПараметры создаваемого DEB-пакета:\n'
     printf '  Режим:               %s\n' "${MODE}"
     printf '  Семейство:           %s\n' "${pg}"
@@ -890,6 +837,114 @@ interactive_configuration() {
     [[ "${MODE}" == 4 ]] && printf '  Целевая БД:          %s\n' "${DATABASE_NAME}"
     printf '  Результат:           %s/%s.deb\n' "${OUTPUT_DIR}" "$(package_basename)"
     confirm 'Собрать пакет с этими параметрами?'
+}
+
+wizard_step() {
+    local step="$1" kind required_kind old_name password_value package_default
+    case "${step}" in
+        backup)
+            if [[ "${MODE}" == 3 ]]; then required_kind=cold; else required_kind=hot; fi
+            select_backup_interactive "${required_kind}" || return $?
+            kind="$(backup_kind "${BACKUP_FILE}")"
+            read_backup_metadata "${kind}"
+            if [[ "${MODE}" == 3 ]]; then
+                pg_ver="${META_PG_VERSION}"
+                pg="${META_PG_FAMILY:-$(infer_family_from_package "${META_PACKAGE}" || true)}"
+                SERVER_PACKAGE="${META_PACKAGE}"
+                [[ -n "${pg}" && -n "${SERVER_PACKAGE}" ]] || return 1
+            else
+                ((PG_VERSION_SET)) || pg_ver="${META_PG_VERSION}"
+                ((PG_FAMILY_SET)) || pg="${META_PG_FAMILY:-${pg}}"
+            fi
+            ((CLUSTER_NAME_SET)) || cls_nm="${META_CLUSTER_NAME}"
+            ((CLUSTER_PORT_SET)) || cls_pt="${META_CLUSTER_PORT}"
+            [[ "${MODE}" != 4 || "${DATABASE_SET}" != 0 ]] || DATABASE_NAME="${META_DATABASE_NAME}"
+            ;;
+        family)
+            old_name="${pg}"
+            prompt_family || return $?
+            if [[ "${old_name}" != "${pg}" ]]; then SERVER_PACKAGE=""; PACKAGE_SET=0; fi
+            ;;
+        version)
+            prompt_validated_value pg_ver 'Версия PostgreSQL' "${pg_ver}" validate_version 'версия должна быть целым числом' || return $?
+            if [[ "${MODE}" == 4 && "${pg_ver}" != "${META_PG_VERSION}" ]]; then
+                warn "горячий бэкап PostgreSQL ${META_PG_VERSION} нельзя развернуть в версию ${pg_ver}"
+                return 1
+            fi
+            ;;
+        package)
+            package_default="$(default_server_package)"
+            [[ -n "${SERVER_PACKAGE}" && "${PACKAGE_SET}" == 1 ]] || SERVER_PACKAGE="${package_default}"
+            prompt_validated_value SERVER_PACKAGE 'Серверный пакет' "${SERVER_PACKAGE}" validate_package_name 'недопустимое имя пакета' || return $?
+            [[ "${SERVER_PACKAGE}" == "${package_default}" ]] || PACKAGE_SET=1
+            ;;
+        dependencies) prompt_extra_dependencies || return $? ;;
+        name)
+            old_name="${cls_nm}"
+            prompt_validated_value cls_nm 'Имя целевого кластера' "${cls_nm}" validate_identifier 'недопустимое имя кластера' || return $?
+            if [[ "${MODE}" != 3 && "${cls_nm}" != "${old_name}" ]]; then
+                ((SCHEMA_SET)) || cls_ch="${cls_nm}"
+                ((USER_SET)) || cls_us="${cls_nm}"
+                ((PASSWORD_SET)) || cls_pw="${cls_nm}"
+            fi
+            ;;
+        port) prompt_validated_value cls_pt 'TCP-порт кластера' "${cls_pt}" validate_port 'порт должен быть числом от 1 до 65535' || return $? ;;
+        schema) prompt_validated_value cls_ch 'Схема/роль-владелец' "${cls_ch}" validate_identifier 'недопустимое имя схемы' || return $? ;;
+        user) prompt_validated_value cls_us 'Прикладной пользователь' "${cls_us}" validate_identifier 'недопустимое имя пользователя' || return $? ;;
+        password)
+            read -r -s -p 'Пароль ролей [Enter — оставить текущее значение]: ' password_value || return 2
+            printf '\n'
+            [[ -z "${password_value}" ]] || cls_pw="${password_value}"
+            [[ -n "${cls_pw}" ]] || return 1
+            ;;
+        database) prompt_validated_value DATABASE_NAME 'Имя целевой БД' "${DATABASE_NAME}" validate_database_name 'недопустимое имя базы данных' || return $? ;;
+        location) prompt_data_location || return $? ;;
+        summary)
+            PREFER_NEWEST_SERVER=no
+            if [[ "${MODE}" == 4 && "${pg}" == postgrespro-ent && "${PACKAGE_SET}" == 0 ]]; then
+                PREFER_NEWEST_SERVER=yes
+                filter_auto_postgrespro_dependencies
+            fi
+            wizard_build_summary || return $?
+            ;;
+    esac
+    return 0
+}
+
+interactive_configuration() {
+    local index=0 result
+    local -a steps=()
+    while true; do
+        if [[ -z "${MODE}" ]]; then
+            select_mode_interactive || return 1
+            index=0
+        fi
+        steps=()
+        if [[ "${MODE}" != 1 ]]; then
+            [[ "${MODE}" != 3 && "${MODE}" != 4 ]] || steps+=(backup)
+            [[ "${MODE}" == 3 ]] || steps+=(family version package)
+            steps+=(dependencies name port)
+            [[ "${MODE}" == 3 ]] || steps+=(schema user password)
+            [[ "${MODE}" != 4 ]] || steps+=(database)
+            steps+=(location)
+        fi
+        steps+=(summary)
+        wizard_screen
+        printf 'Интерактивная сборка, режим %s; шаг %s/%s\n' "${MODE}" "$((index+1))" "${#steps[@]}"
+        printf 'Неверный ввод — назад; конец ввода — выход.\n'
+        if wizard_step "${steps[index]}"; then
+            ((index += 1))
+            ((index < ${#steps[@]})) || return 0
+        else
+            result=$?
+            ((result != 2)) || return 1
+            if ((index > 0)); then
+                ((index -= 1))
+            else
+                MODE=""
+            fi
+        fi
+    done
 }
 
 interactive_requested() {

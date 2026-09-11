@@ -30,10 +30,14 @@ tar -tvf "$stage/payload.tar" "$member" | tee "$stage/entry"
 grep -q '^-rw-r--r-- root/root ' "$stage/entry"
 tar -xOf "$stage/payload.tar" ./usr/local/share/pg_claster_creator/.new-claster.config > "$stage/extracted-config"
 cmp "$stage/extracted-config" "$repo/.new-claster.config"
+for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh README.md TEST.md CHANGELOG.md; do
+    tar -xOf "$stage/payload.tar" "./usr/local/share/pg_claster_creator/$name" > "$stage/extracted-file"
+    cmp "$stage/extracted-file" "$repo/$name"
+done
 sed '/^main "\$@"$/d' "$stage/create-claster-deb.sh" > "$stage/check-builder.sh"
 mv "$stage/TEST-$journal_version-journal-passed.md" "$stage/journal-hidden"
 for mode in 1 2 3 4; do
     if (source "$stage/check-builder.sh"; MODE="$mode"; build_package) > "$stage/error" 2>&1; then exit 1; fi
     grep -q 'не найден журнал успешного тестирования' "$stage/error"
 done
-echo 'PASS: version, help, syntax, journal bytes/path/0644, source config, missing-journal rejection'
+echo 'PASS: version, help, syntax, journal bytes/path/0644, source config/scripts/docs, missing-journal rejection'

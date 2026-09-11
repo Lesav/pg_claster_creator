@@ -25,6 +25,11 @@
 #   restore    Restore a cold cluster backup or a hot database dump.
 #   delete     Delete a cluster or, interactively, one database. The menu offers
 #              a cold cluster backup or hot database backup before deletion.
+#   Interactive menu item 3 selects a cluster, then offers the opposite of its
+#   current state with explicit y/N confirmation; no separate action selection.
+#   Interactive menu item 4 additionally renames a cluster with pg_renamecluster,
+#   preserving its online/offline state and updating project-specific units.
+#   Database/role names and external cron jobs are not renamed.
 #
 # Command-line options:
 #   -h, --help                         Print detailed usage information.
@@ -71,7 +76,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.2.0"
+readonly SCRIPT_VERSION="2.3.0"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -163,6 +168,10 @@ usage() {
 Без ключей сценарий работает интерактивно. Если указано действие через
 --action или PGCC_ACTION, меню и подтверждения отключаются. Недостающий
 обязательный параметр в таком режиме считается ошибкой.
+Интерактивный пункт 3 — Остановить/Запустить: кластер, действие по состоянию, y/N.
+Интерактивный пункт 4 — Переименовать: проверка нового имени, остановка,
+переименование регистрации/путей и служб; исходное состояние запуска сохраняется.
+Имена БД/ролей и задания cron не переименовываются.
 При неинтерактивном install занятый порт автоматически заменяется первым
 следующим свободным; предупреждение показывает фактический порт и команду
 для его последующей смены.
@@ -1161,13 +1170,14 @@ systemd_unit_dir() {
 }
 
 cluster_service_file() {
-    local version="$1" name="$2" service candidate
+    local version="$1" name="$2" include_saved="${3:-yes}" service candidate
     service="postgresql@${version}-${name}.service"
     for candidate in \
         "/etc/systemd/system/${service}" \
         "/usr/lib/systemd/system/${service}" \
         "/lib/systemd/system/${service}" \
         "/.postgres/systemd/save/${service}"; do
+        [[ "${include_saved}" == no && "${candidate}" == /.postgres/systemd/save/* ]] && continue
         if [[ -f "${candidate}" ]]; then
             printf '%s' "${candidate}"
             return 0
@@ -1176,11 +1186,32 @@ cluster_service_file() {
     return 1
 }
 
+# Normalize historical standard roots to the actual server package; preserve
+# custom locations. Cluster renaming alone must not retain another edition's root.
+cold_restore_data_path() {
+    local package="$1" source="$2" original="$3" target="$4" base fields family version
+    base="${source%/${original}}"
+    fields="$(package_to_fields "${package}")" || return 1
+    family="${fields%%|*}"; version="${fields#*|}"
+    if [[ "${base}" =~ ^/var/lib/postgresql/(tantor-(free|se|be)-)?[0-9]+$ ]]; then
+        case "${family}" in
+            tantor-*) base="/var/lib/postgresql/${family}-${version}" ;;
+            *) base="/var/lib/postgresql/${version}" ;;
+        esac
+    fi
+    printf '%s/%s' "${base}" "${target}"
+}
+
 restore_target_conflict() {
-    local version="$1" name="$2" data_dir="$3" service candidate
+    local version="$1" name="$2" data_dir="$3" service candidate rows existing_version
     service="postgresql@${version}-${name}.service"
-    if cluster_exists "${version}" "${name}"; then
-        printf 'кластер %s/%s уже зарегистрирован' "${version}" "${name}"
+    rows="$(pg_lsclusters --no-header 2>/dev/null)" || {
+        printf 'не удалось проверить зарегистрированные кластеры'
+        return 0
+    }
+    existing_version="$(awk -v n="${name}" '$2 == n {print $1}' <<<"${rows}")"
+    if [[ -n "${existing_version}" ]]; then
+        printf 'имя кластера %s уже зарегистрировано (PostgreSQL %s); выберите другое имя независимо от версии' "${name}" "${existing_version//$'\n'/, }"
         return 0
     fi
     for candidate in \
@@ -1189,8 +1220,13 @@ restore_target_conflict() {
         "/etc/systemd/system/${service}" \
         "/usr/lib/systemd/system/${service}" \
         "/lib/systemd/system/${service}" \
-        "/.postgres/systemd/${service}" \
-        "/.postgres/systemd/save/${service}"; do
+        "/.postgres/systemd/${service}"; do
+        # systemd/save is a cache, never a live restore target.
+        # The convenience link is recreated by ensure_symlink after restore.
+        # Keep conflicts for real files, live links and all other destinations.
+        if [[ "${candidate}" == "/.postgres/systemd/${service}" && -L "${candidate}" && ! -e "${candidate}" ]]; then
+            continue
+        fi
         if [[ -e "${candidate}" || -L "${candidate}" ]]; then
             printf 'целевой путь уже существует: %s' "${candidate}"
             return 0
@@ -1513,6 +1549,163 @@ update_cluster_data_path() {
         "pg_lsclusters показывает каталог ${reported_data} вместо ${new_data}"
 }
 
+# Read state without treating a failed listing as an offline cluster.
+cluster_power_state() {
+    local version="$1" name="$2" listing state
+    listing="$(pg_lsclusters --no-header)" || return 1
+    state="$(awk -v v="${version}" -v n="${name}" '$1==v && $2==n {print $4}' <<<"${listing}")"
+    case "${state}" in
+        online|online,*) printf online ;;
+        down|down,*) printf down ;;
+        *) return 1 ;;
+    esac
+}
+
+cluster_power_menu() {
+    local action desired verb version name port status owner data log state
+    header
+    step "Кластер: Остановить/Запустить"
+    select_cluster 'Введите имя кластера или номер из списка' name-or-number || return 0
+    read -r version name port status owner data log <<<"${SELECTED_CLUSTER_ROW}"
+    state="$(cluster_power_state "${version}" "${name}")" || { warn "не удалось определить текущее состояние ${version}/${name}"; pause; return 0; }
+    case "${state}" in
+        online) action=stop; desired=down; verb=Остановить ;;
+        down) action=start; desired=online; verb=Запустить ;;
+    esac
+    printf 'Кластер %s/%s, порт %s, состояние %s.\n' "${version}" "${name}" "${port}" "${state}"
+    confirm "${verb} кластер ${version}/${name}?" N || return 0
+    # Recheck state, but keep the confirmed action rather than toggling again.
+    state="$(cluster_power_state "${version}" "${name}")" || { warn "не удалось повторно проверить состояние; действие отменено"; pause; return 0; }
+    if [[ "${state}" != "${desired}" ]]; then
+        case "${action}" in
+            stop) stop_cluster_checked "${version}" "${name}" ;;
+            start) start_cluster_checked "${version}" "${name}" ;;
+        esac
+    fi
+    state="$(cluster_power_state "${version}" "${name}")" || die "не удалось проверить результат ${action} ${version}/${name}"
+    [[ "${state}" == "${desired}" ]] || die "кластер ${version}/${name} остался в состоянии ${state}"
+    printf 'Кластер %s/%s: %s.\n' "${version}" "${name}" "${state}"
+    pause
+}
+
+# Match pg_renamecluster's word-boundary path replacement exactly.
+renamed_cluster_path() {
+    perl -e 'my ($s,$old,$new)=@ARGV; $s =~ s/\b\Q$old\E\b/$new/g; print $s' -- "$1" "$2" "$3"
+}
+
+rename_cluster_checked() {
+    local version="$1" name="$2" new_name="$3" data="$4" status="$5"
+    local new_data conflict service old_unit new_unit conf new_conf candidate recovery rows reported
+    local old_log new_log file was_online=no was_enabled=no stats new_stats backup_index=0
+    validate_identifier "${new_name}" && ((${#new_name} <= 63)) || die "недопустимое новое имя кластера"
+    [[ "${name}" != "${new_name}" ]] || die "новое имя совпадает с текущим"
+    command -v pg_renamecluster >/dev/null || die "не найдена команда pg_renamecluster"
+    new_data="$(renamed_cluster_path "${data}" "${name}" "${new_name}")" || die "не удалось определить новый путь данных"
+    [[ "${data}" == /* && "${data}" != / && -d "${data}" && ! -L "${data}" ]] || die "небезопасный исходный каталог данных"
+    [[ -d "${new_data%/*}" ]] || die "родительский каталог нового пути не существует: ${new_data%/*}"
+    # Name conflicts are global. An unchanged custom data directory belongs to
+    # this source cluster and is not a destination collision.
+    if [[ "${new_data}" == "${data}" ]]; then
+        conflict="$(restore_target_conflict "${version}" "${new_name}" "/etc/postgresql/${version}/${new_name}")" && die "${conflict}"
+    else
+        conflict="$(restore_target_conflict "${version}" "${new_name}" "${new_data}")" && die "${conflict}"
+    fi
+    conf="/etc/postgresql/${version}/${name}"
+    new_conf="/etc/postgresql/${version}/${new_name}"
+    [[ -d "${conf}" && ! -L "${conf}" ]] || die "небезопасный каталог конфигурации ${conf}"
+    stats="$(pg_conftool "${version}" "${name}" show stats_temp_directory 2>/dev/null | sed -n "s/^stats_temp_directory = '//; s/'$//p" || true)"
+    if [[ -n "${stats}" && -d "${stats}" ]]; then
+        new_stats="$(renamed_cluster_path "${stats}" "${name}" "${new_name}")"
+        [[ "${stats}" == "${new_stats}" || (! -e "${new_stats}" && ! -L "${new_stats}") ]] || die "целевой каталог статистики уже существует: ${new_stats}"
+    fi
+    for candidate in "/etc/systemd/system/postgresql@${version}-${new_name}.service.d" "/etc/syslog-ng/conf.d/mod-astra-postgres-${version}-${new_name}.conf"; do
+        [[ ! -e "${candidate}" && ! -L "${candidate}" ]] || die "целевой путь уже существует: ${candidate}"
+    done
+    # pg_renamecluster can rename rotated logs as well; refuse overwrites.
+    for old_log in /var/log/postgresql/postgresql-"${version}"-"${name}".log*; do
+        [[ -e "${old_log}" || -L "${old_log}" ]] || continue
+        new_log="$(renamed_cluster_path "${old_log}" "${name}" "${new_name}")"
+        [[ ! -e "${new_log}" && ! -L "${new_log}" ]] || die "целевой лог уже существует: ${new_log}"
+    done
+    recovery="$(mktemp -d /var/tmp/pgcc-rename.XXXXXX)" || die "не удалось создать каталог страховочной копии"
+    cp -a -- "${conf}" "${recovery}/config" || die "не удалось сохранить конфигурацию"
+    old_unit="$(cluster_service_file "${version}" "${name}" || true)"
+    [[ -z "${old_unit}" ]] || cp -- "${old_unit}" "${recovery}/unit.service" || die "не удалось сохранить unit"
+    for candidate in "/etc/systemd/system/postgresql@${version}-${name}.service" "/usr/lib/systemd/system/postgresql@${version}-${name}.service" "/lib/systemd/system/postgresql@${version}-${name}.service" "/.postgres/systemd/save/postgresql@${version}-${name}.service"; do
+        if [[ -e "${candidate}" || -L "${candidate}" ]]; then
+            cp -a -- "${candidate}" "${recovery}/original-unit-${backup_index}" || die "не удалось сохранить ${candidate}"
+            printf '%s\t%s\n' "original-unit-${backup_index}" "${candidate}" >>"${recovery}/unit-paths.txt"
+            ((backup_index += 1))
+        fi
+    done
+    systemctl is-enabled --quiet "postgresql@${version}-${name}.service" 2>/dev/null && was_enabled=yes
+    printf 'Страховочная копия конфигурации и unit: %s (данные БД не копируются).\n' "${recovery}"
+    [[ "${status}" != online* ]] || was_online=yes
+    if [[ "${was_online}" == yes ]]; then stop_cluster_checked "${version}" "${name}"; fi
+    if ! run_parsec_aware pg_renamecluster "${version}" "${name}" "${new_name}"; then
+        die "pg_renamecluster завершился ошибкой; возможны частичные изменения. Кластер не запускается автоматически. Копия: ${recovery}"
+    fi
+    [[ -d "${new_conf}" && -d "${new_data}" ]] || die "после переименования нет ожидаемых каталогов; копия: ${recovery}"
+    while IFS= read -r -d '' file; do
+        replace_literal_in_file "${conf}" "${new_conf}" "${file}"
+        replace_literal_in_file "${data}" "${new_data}" "${file}"
+        replace_literal_in_file "${version}-${name}" "${version}-${new_name}" "${file}"
+    done < <(find "${new_conf}" -type f -print0)
+    for file in "${new_data}/postgresql.auto.conf" "${new_data}/postmaster.opts"; do
+        replace_literal_in_file "${conf}" "${new_conf}" "${file}"
+        replace_literal_in_file "${data}" "${new_data}" "${file}"
+        replace_literal_in_file "${version}-${name}" "${version}-${new_name}" "${file}"
+    done
+    mkdir -p "${new_conf}/conf.d"
+    printf "cluster_name = '%s/%s'\n" "${version}" "${new_name}" >"${new_conf}/conf.d/cluster_name.conf"
+    set_postgresql_setting "${new_data}/postgresql.auto.conf" cluster_name "'${version}/${new_name}'"
+    rows="$(pg_lsclusters --no-header)" || die "не удалось проверить переименованный кластер; копия: ${recovery}"
+    reported="$(awk -v v="${version}" -v n="${new_name}" '$1==v && $2==n {print $6}' <<<"${rows}")"
+    [[ "${reported}" == "${new_data}" ]] || die "неожиданный путь после переименования: ${reported}; копия: ${recovery}"
+    service="postgresql@${version}-${new_name}.service"
+    new_unit="$(systemd_unit_dir)/${service}"
+    if [[ -f "${recovery}/unit.service" ]]; then
+        cp -- "${recovery}/unit.service" "${new_unit}" || die "не удалось записать новый unit"
+        replace_literal_in_file "${conf}" "${new_conf}" "${new_unit}"
+        replace_literal_in_file "${data}" "${new_data}" "${new_unit}"
+        replace_literal_in_file "${version}-${name}" "${version}-${new_name}" "${new_unit}"
+    else
+        write_cluster_unit_file "${new_unit}" "${version}" "${new_name}" "${new_data}"
+    fi
+    remove_cluster_service_files "${version}" "${name}"
+    mkdir -p /.postgres/systemd/save
+    cp --remove-destination -- "${new_unit}" "/.postgres/systemd/save/${service}" || die "не удалось обновить копию unit"
+    ensure_symlink "${new_unit}" "/.postgres/systemd/${service}"
+    systemctl daemon-reload || die "не удалось перечитать systemd"
+    if [[ "${was_enabled}" == yes ]]; then systemctl enable "${service}" || die "не удалось включить новую службу"; fi
+    if [[ "${was_online}" == yes ]]; then start_cluster_checked "${version}" "${new_name}"; fi
+    printf 'Кластер %s/%s переименован в %s/%s. Каталог данных: %s.\n' "${version}" "${name}" "${version}" "${new_name}" "${new_data}"
+    warn "задания cron и внешние подключения со старым именем проверьте отдельно; имена БД и ролей не изменены"
+}
+
+rename_cluster_menu() {
+    local version name port status owner data log new_name conflict new_data
+    header
+    step "Кластер: Переименовать"
+    select_cluster "Выберите кластер" || return 0
+    read -r version name port status owner data log <<<"${SELECTED_CLUSTER_ROW}"
+    while true; do
+        read -r -p "Новое имя кластера (0 — назад): " new_name || return 0
+        [[ "${new_name}" != 0 ]] || return 0
+        validate_identifier "${new_name}" && ((${#new_name} <= 63)) || { warn "имя: 1–63 символа, строчные латинские буквы, цифры и подчёркивание; не начинается с цифры"; continue; }
+        [[ "${new_name}" != "${name}" ]] || { warn "новое имя совпадает с текущим"; continue; }
+        new_data="$(renamed_cluster_path "${data}" "${name}" "${new_name}")"
+        if conflict="$(restore_target_conflict "${version}" "${new_name}" "$([[ "${data}" == "${new_data}" ]] && printf '/etc/postgresql/%s/%s' "${version}" "${new_name}" || printf '%s' "${new_data}")")"; then
+            warn "${conflict}"; continue
+        fi
+        break
+    done
+    printf 'Кластер: %s/%s -> %s/%s\nДанные: %s -> %s\n' "${version}" "${name}" "${version}" "${new_name}" "${data}" "${new_data}"
+    confirm "Остановить кластер и переименовать?" Y || return 0
+    rename_cluster_checked "${version}" "${name}" "${new_name}" "${data}" "${status}"
+    pause
+}
+
 move_cluster_data_menu() {
     local row version name port status owner data log default_base target_base target_data
     local choice target_root was_online=no
@@ -1596,7 +1789,7 @@ move_cluster_data_menu() {
 }
 
 select_cluster() {
-    local prompt="$1" choice i listing message
+    local prompt="$1" selection_mode="${2:-number}" choice i listing message
     local -a rows=()
     SELECTED_CLUSTER_ROW=""
     if ! listing="$(pg_lsclusters --no-header)"; then
@@ -1626,6 +1819,16 @@ select_cluster() {
     done
     printf '  0 - Вернуться назад\n'
     read -r -p "${prompt}: " choice || return 1
+    if [[ "${selection_mode}" == name-or-number && ! "${choice}" =~ ^[0-9]+$ ]]; then
+        local -a matches=()
+        mapfile -t matches < <(printf '%s\n' "${rows[@]}" | awk -v n="${choice}" '$2==n {print}')
+        if ((${#matches[@]} == 1)); then
+            SELECTED_CLUSTER_ROW="${matches[0]}"
+            return 0
+        fi
+        warn "имя не найдено или неоднозначно; выберите кластер по номеру"
+        return 1
+    fi
     [[ "${choice}" =~ ^[0-9]+$ ]] || return 1
     ((choice == 0)) && return 1
     ((choice >= 1 && choice <= ${#rows[@]})) || return 1
@@ -2864,7 +3067,7 @@ restore_menu() {
         if ((TARGET_NAME_SET)); then restore_name="${cls_nm}"; else restore_name="${original_name}"; fi
         if ((TARGET_PORT_SET)); then restore_port="${cls_pt}"; else restore_port="${original_port}"; fi
         validate_identifier "${restore_name}" || die "недопустимое имя кластера: ${restore_name}"
-        restore_data_dir="${original_data_dir%/${original_name}}/${restore_name}"
+        restore_data_dir="$(cold_restore_data_path "${package}" "${original_data_dir}" "${original_name}" "${restore_name}")" || die "не удалось определить каталог данных для рестори"
         if conflict="$(restore_target_conflict "${version}" "${restore_name}" "${restore_data_dir}")"; then
             die "${conflict}. Холодный рестори поверх существующего кластера запрещён"
         fi
@@ -2879,7 +3082,7 @@ restore_menu() {
                 warn "используйте строчные латинские буквы, цифры и подчёркивание"
                 continue
             }
-            restore_data_dir="${original_data_dir%/${original_name}}/${restore_name}"
+            restore_data_dir="$(cold_restore_data_path "${package}" "${original_data_dir}" "${original_name}" "${restore_name}")" || die "не удалось определить каталог данных для рестори"
             if conflict="$(restore_target_conflict "${version}" "${restore_name}" "${restore_data_dir}")"; then
                 warn "АЛАРМ: ${conflict}; введите другое имя кластера"
                 continue
@@ -2902,6 +3105,7 @@ restore_menu() {
     name="${restore_name}"
     restore_conf_dir="/etc/postgresql/${version}/${restore_name}"
     printf 'Цель: PostgreSQL %s, кластер %s, порт %s\n' "${version}" "${restore_name}" "${restore_port}"
+    printf 'Каталог данных: %s\n' "${restore_data_dir}"
 
     if ((!NON_INTERACTIVE)); then
         confirm "Восстановить кластер с указанными именем и портом?" Y || return 0
@@ -2919,6 +3123,11 @@ restore_menu() {
         [[ "${entry}" != *'/../'* && "${entry}" != *'/..' && "${entry}" != root/.. ]] || \
             die "выход за корень в пути архива: ${entry}"
     done < <(tar -tzf "${archive}")
+    # Only standard roots are changed here (strictly limited alphabet above).
+    # Custom roots are retained, so no user-supplied path is used as a regexp.
+    if [[ "${original_data_dir%/*}" != "${restore_data_dir%/*}" ]]; then
+        transform_args+=(--transform "s#^root${original_data_dir%/*}/#root${restore_data_dir%/*}/#")
+    fi
     if [[ "${restore_name}" != "${original_name}" ]]; then
         transform_args+=(--transform "s#/${original_name}/#/${restore_name}/#g")
         transform_args+=(--transform "s#/${original_name}\$#/${restore_name}#")
@@ -2928,7 +3137,7 @@ restore_menu() {
     transform_args+=(--transform "s#^root/etc/postgresql/${registered_pg_version}/#root/etc/postgresql/${version}/#")
     transform_args+=(--transform "s#postgresql@${registered_pg_version}-#postgresql@${version}-#g")
     tar "${transform_args[@]}" --keep-directory-symlink -xzf "${archive}" -C / --strip-components=1 \
-        --exclude='root/backup-info.env'
+        --exclude='root/backup-info.env' --exclude='root/.postgres/systemd/save'
 
     while IFS= read -r -d '' file; do
         replace_literal_in_file "${original_data_dir}" "${restore_data_dir}" "${file}"
@@ -2949,19 +3158,23 @@ EOF
         "'/run/postgresql/${version}-${restore_name}.pid'"
 
     restore_service_file=""
-    if [[ -n "${service_file:-}" ]]; then
+    unit_dir="$(systemd_unit_dir)"
+    # A saved unit may be used only from this backup, never from the host cache.
+    if [[ "${service_file:-}" == /.postgres/systemd/save/* ]]; then
+        if tar -xOzf "${archive}" -- "root${service_file}" >"${stage}/archived-unit.service" 2>/dev/null && [[ -s "${stage}/archived-unit.service" ]]; then
+            restore_service_file="${unit_dir}/postgresql@${version}-${restore_name}.service"
+            cp -- "${stage}/archived-unit.service" "${restore_service_file}"
+        fi
+    fi
+    if [[ -n "${service_file:-}" && "${service_file}" != /.postgres/systemd/save/* ]]; then
         candidate="$(dirname -- "${service_file}")/postgresql@${version}-${restore_name}.service"
         [[ -f "${candidate}" ]] && restore_service_file="${candidate}"
     fi
     if [[ -z "${restore_service_file}" ]]; then
-        restore_service_file="$(cluster_service_file "${version}" "${restore_name}" || true)"
+        restore_service_file="$(cluster_service_file "${version}" "${restore_name}" no || true)"
     fi
     unit_dir="$(systemd_unit_dir)"
-    if [[ "${restore_service_file}" == "/.postgres/systemd/save/"* ]]; then
-        candidate="${unit_dir}/postgresql@${version}-${restore_name}.service"
-        cp -f -- "${restore_service_file}" "${candidate}"
-        restore_service_file="${candidate}"
-    elif [[ -z "${restore_service_file}" ]]; then
+    if [[ -z "${restore_service_file}" ]]; then
         restore_service_file="${unit_dir}/postgresql@${version}-${restore_name}.service"
         write_cluster_unit_file "${restore_service_file}" "${version}" "${restore_name}" "${restore_data_dir}"
         printf 'В старом бэкапе отсутствует systemd unit; создан новый %s.\n' \
@@ -2970,7 +3183,8 @@ EOF
     replace_literal_in_file "${original_data_dir}" "${restore_data_dir}" "${restore_service_file}"
     replace_literal_in_file "${original_conf_dir}" "${restore_conf_dir}" "${restore_service_file}"
     replace_literal_in_file "${registered_pg_version}-${original_name}" "${version}-${restore_name}" "${restore_service_file}"
-    cp -f -- "${restore_service_file}" "/.postgres/systemd/save/$(basename -- "${restore_service_file}")"
+    # Replace the cache entry itself, never follow an old cache symlink.
+    cp --remove-destination -- "${restore_service_file}" "/.postgres/systemd/save/$(basename -- "${restore_service_file}")"
     ensure_symlink "${restore_service_file}" "/.postgres/systemd/$(basename -- "${restore_service_file}")"
     systemctl daemon-reload
     systemctl enable "$(basename -- "${restore_service_file}")"
@@ -3070,21 +3284,25 @@ main_menu() {
             '0 - Выход' \
             '1 - Информация: о развернутых кластерах' \
             '2 - Кластер: Установить' \
-            '3 - Кластер: Переключить порт' \
-            '4 - Кластер: Переместить данные' \
-            '5 - Кластер: Бэкап' \
-            '6 - Кластер: Рестори' \
-            '7 - Кластер: Удалить'
+            '3 - Кластер: Остановить/Запустить' \
+            '4 - Кластер: Переименовать' \
+            '5 - Кластер: Переключить порт' \
+            '6 - Кластер: Переместить данные' \
+            '7 - Кластер: Бэкап' \
+            '8 - Кластер: Рестори' \
+            '9 - Кластер: Удалить'
         read -r -p "Выбор: " choice || exit 0
         case "${choice}" in
             0) exit 0 ;;
             1) info_menu ;;
             2) install_menu ;;
-            3) change_port_menu ;;
-            4) move_cluster_data_menu ;;
-            5) backup_menu ;;
-            6) restore_menu ;;
-            7) delete_menu ;;
+            3) cluster_power_menu ;;
+            4) rename_cluster_menu ;;
+            5) change_port_menu ;;
+            6) move_cluster_data_menu ;;
+            7) backup_menu ;;
+            8) restore_menu ;;
+            9) delete_menu ;;
             *) clear 2>/dev/null || true; exit 0 ;;
         esac
     done

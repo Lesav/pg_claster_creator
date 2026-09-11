@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-11" "pg_claster_creator 2.2.0" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-11" "pg_claster_creator 2.3.0" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -24,6 +24,18 @@ the program opens an interactive menu. Supplying an action or its matching
 .B PGCC_ACTION
 environment variable disables prompts and requires all action-specific values.
 .SH ACTIONS
+.PP
+Interactive menu item 3 asks for a cluster name or list index, offers stop for
+online or start for down, and asks for y/N confirmation (Enter cancels).
+There is no separate action menu. Redundant operations
+are skipped. State is checked before and after confirmation and after execution.
+Boot enablement is unchanged.
+.PP
+Interactive menu item 4 renames a cluster using pg_renamecluster after validating
+the new name across all major versions and stopping the source cluster.
+Project paths and units are updated; port, running state and boot enablement
+are preserved. Database/role names and external cron jobs are not renamed.
+Configuration and unit copies are retained in /var/tmp/pgcc-rename.* (not database data).
 .TP
 .B info
 In interactive mode, display a numbered list of registered clusters. After an
