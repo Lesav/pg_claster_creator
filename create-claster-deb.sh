@@ -20,8 +20,8 @@
 #   but intentionally does not create a command symlink for it in /usr/local/bin.
 #   All modes require the explicitly selected validation journal beside the builder
 #   and install it into the same share directory with mode 0644. Missing release
-#   evidence aborts the build. Packaging-only 2.1.3 reuses the unchanged 2.1.2
-#   functional validation; it does not claim a new full test run.
+#   evidence aborts the build. The 2.1.2 journal is historical; it does not
+#   validate the new 2.2.0 features. See TEST.md for the current test scope.
 #
 # Package modes accepted by --mode:
 #   1  Install scripts, configuration, documentation, and the command symlink.
@@ -33,7 +33,7 @@
 #   -h, --help                 Print detailed usage information.
 #   -v, --version              Print the builder version.
 #   -m, --mode MODE            Select package mode 1, 2, 3, or 4.
-#       --pg-family FAMILY     postgresql, postgrespro-ent, or tantor-free.
+#       --pg-family FAMILY     postgresql, postgrespro-ent, tantor-free, tantor-se, tantor-be.
 #       --pg-version VERSION   Set the PostgreSQL major version.
 #       --cluster-name NAME    Set the target cluster name.
 #       --port PORT            Set the target cluster TCP port.
@@ -84,7 +84,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.1.3"
+readonly SCRIPT_VERSION="2.2.0"
 # Bump this only when a new functional validation journal is available.
 readonly TEST_JOURNAL_VERSION="2.1.2"
 readonly TEST_JOURNAL_NAME="TEST-${TEST_JOURNAL_VERSION}-journal-passed.md"
@@ -166,7 +166,7 @@ usage() {
   -h, --help                  Показать эту справку и выйти
   -v, --version               Показать версию и выйти
   -m, --mode РЕЖИМ            Явно выбрать режим сборки 1|2|3|4
-      --pg-family СЕМЕЙСТВО   postgresql|postgrespro-ent|tantor-free
+      --pg-family СЕМЕЙСТВО   postgresql|postgrespro-ent|tantor-free|tantor-se|tantor-be
       --pg-version ВЕРСИЯ     Основная версия PostgreSQL; минимум для
                               postgrespro-ent в режиме 4 без --package
       --cluster-name ИМЯ      Имя создаваемого/восстанавливаемого кластера
@@ -576,6 +576,8 @@ infer_family_from_package() {
     case "$1" in
         postgrespro-ent-*) printf 'postgrespro-ent' ;;
         tantor-free-*) printf 'tantor-free' ;;
+        tantor-se-server-*) printf 'tantor-se' ;;
+        tantor-be-server-*) printf 'tantor-be' ;;
         postgresql-*) printf 'postgresql' ;;
         *) return 1 ;;
     esac
@@ -583,16 +585,18 @@ infer_family_from_package() {
 
 prompt_family() {
     local choice default_choice=1
-    case "${pg}" in postgresql) default_choice=1 ;; postgrespro-ent) default_choice=2 ;; tantor-free) default_choice=3 ;; esac
+    case "${pg}" in postgresql) default_choice=1 ;; postgrespro-ent) default_choice=2 ;; tantor-free) default_choice=3 ;; tantor-se) default_choice=4 ;; tantor-be) default_choice=5 ;; esac
     while true; do
-        printf '\nСемейство PostgreSQL:\n1 - postgresql\n2 - postgrespro-ent\n3 - tantor-free\n'
+        printf '\nСемейство PostgreSQL:\n1 - postgresql\n2 - postgrespro-ent\n3 - tantor-free\n4 - tantor-se (Special Edition)\n5 - tantor-be (Basic Edition)\n'
         read -r -p "Выбор [${default_choice}]: " choice || return 1
         choice="${choice:-${default_choice}}"
         case "${choice}" in
             1) pg=postgresql; return 0 ;;
             2) pg=postgrespro-ent; return 0 ;;
             3) pg=tantor-free; return 0 ;;
-            *) warn "выберите 1, 2 или 3" ;;
+            4) pg=tantor-se; return 0 ;;
+            5) pg=tantor-be; return 0 ;;
+            *) warn "выберите число от 1 до 5" ;;
         esac
     done
 }
@@ -675,8 +679,8 @@ prompt_extra_dependencies() {
 }
 
 default_target_data_path() {
-    if [[ "${pg}" == tantor-free ]]; then
-        printf '/var/lib/postgresql/tantor-free-%s/%s' "${pg_ver}" "${cls_nm}"
+    if [[ "${pg}" == tantor-free || "${pg}" == tantor-se || "${pg}" == tantor-be ]]; then
+        printf '/var/lib/postgresql/%s-%s/%s' "${pg}" "${pg_ver}" "${cls_nm}"
     else
         printf '/var/lib/postgresql/%s/%s' "${pg_ver}" "${cls_nm}"
     fi
@@ -902,6 +906,7 @@ default_server_package() {
         postgresql) printf 'postgresql-%s-server' "${pg_ver}" ;;
         postgrespro-ent) printf 'postgrespro-ent-%s-server' "${pg_ver}" ;;
         tantor-free) printf 'tantor-free-server-%s-server' "${pg_ver}" ;;
+        tantor-se|tantor-be) printf '%s-server-%s' "${pg}" "${pg_ver}" ;;
     esac
 }
 
@@ -924,7 +929,7 @@ validate_options() {
 
     if [[ "${MODE}" != 1 ]]; then
         case "${pg}" in
-            postgresql|postgrespro-ent|tantor-free) ;;
+            postgresql|postgrespro-ent|tantor-free|tantor-se|tantor-be) ;;
             *) die "неподдерживаемое семейство PostgreSQL: ${pg}" ;;
         esac
         [[ "${pg_ver}" =~ ^[0-9]+$ ]] || die "версия PostgreSQL должна быть целым числом"
@@ -941,6 +946,10 @@ validate_options() {
         fi
         [[ "${SERVER_PACKAGE}" =~ ^[a-z0-9][a-z0-9+.-]*$ ]] || \
             die "недопустимое имя серверного пакета: ${SERVER_PACKAGE}"
+        if [[ "${pg}" == tantor-se || "${pg}" == tantor-be || "${SERVER_PACKAGE}" == tantor-se-* || "${SERVER_PACKAGE}" == tantor-be-* ]]; then
+            [[ "${SERVER_PACKAGE}" == "${pg}-server-${pg_ver}" ]] || die \
+                "пакет ${SERVER_PACKAGE} не соответствует семейству ${pg} и версии ${pg_ver}"
+        fi
         if [[ "${MODE}" == 4 && "${pg}" == postgrespro-ent && "${PACKAGE_SET}" == 0 ]]; then
             PREFER_NEWEST_SERVER=yes
         fi

@@ -9,3 +9,4 @@
 /create-claster-deb.sh text eol=lf
 /create-claster.sh text eol=lf
 /man/** text eol=lf
+/tools/** text eol=lf

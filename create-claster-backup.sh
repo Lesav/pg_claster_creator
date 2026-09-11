@@ -9,6 +9,8 @@
 #   create-claster.sh. The required positional arguments are PostgreSQL major
 #   version, cluster name, and database name. The backup directory can be set
 #   explicitly or inherited from .new-claster.config.
+#   PostgreSQL, PostgresPro Enterprise and Tantor Free/SE/BE are resolved by
+#   create-claster.sh from the existing cluster, not from a preferred edition.
 #
 # Backup and retention behavior:
 #   A normal invocation creates one custom-format hot backup. After a successful
@@ -52,7 +54,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-backup.sh"
-readonly SCRIPT_VERSION="2.1.3"
+readonly SCRIPT_VERSION="2.2.0"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
 readonly INSTALLED_CONFIG_FILE="/usr/local/shared/pg_claster_creator/.new-claster.config"
@@ -394,7 +396,7 @@ acquire_task_lock() {
 }
 
 main() {
-    local version_value cluster database creator
+    local version_value cluster database creator archive_version cluster_data
     parse_args "$@"
     ((${#POSITIONAL_ARGS[@]} == 3)) || { usage >&2; die "требуются аргументы <версия> <кластер> <имя БД>"; }
     version_value="${POSITIONAL_ARGS[0]}"
@@ -423,10 +425,16 @@ main() {
         return 0
     fi
     acquire_task_lock "${version_value}" "${cluster}" "${database}"
+    # Delegate edition detection (including Tantor SE/BE) to the existing cluster.
+    # Never pass a preferred package: cron must not replace BE with SE.
     creator="$(resolve_creator)" || die "не найден create-claster.sh"
     "${creator}" --action backup "${version_value}" "${cluster}" \
         --backup-type hot --database "${database}" --backup-dir "${BACKUP_DIR}"
-    apply_retention "${BACKUP_DIR}" "${version_value}" "${database}"
+    # Archive names use the physical major, while cron still addresses the
+    # registered cluster. Resolve it before applying version-scoped retention.
+    cluster_data="$(pg_lsclusters -h | awk -v v="${version_value}" -v c="${cluster}" '$1 == v && $2 == c {print $6}')" || die "не удалось определить каталог кластера для ротации"
+    archive_version="$(bash -c 'source "$1"; cluster_backup_version "$2" "$3"' _ "${creator}" "${version_value}" "${cluster_data}")" || die "не удалось определить версию архива для ротации"
+    apply_retention "${BACKUP_DIR}" "${archive_version}" "${database}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

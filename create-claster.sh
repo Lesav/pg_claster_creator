@@ -31,7 +31,7 @@
 #   -v, --version                      Print the script version.
 #   -a, --action ACTION                Select a non-interactive action.
 #       --package PACKAGE              Select an exact PostgreSQL server package.
-#       --pg-family FAMILY             postgresql, postgrespro-ent, or tantor-free.
+#       --pg-family FAMILY             postgresql, postgrespro-ent, tantor-free, tantor-se, tantor-be.
 #       --pg-version VERSION           Select the PostgreSQL major version.
 #       --cluster-name NAME            Set the source, target, or new cluster name.
 #       --port PORT                    Set a cluster TCP port.
@@ -71,7 +71,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.1.3"
+readonly SCRIPT_VERSION="2.2.0"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -177,7 +177,7 @@ usage() {
   -v, --version                      Показать версию сценария и выйти
   -a, --action ДЕЙСТВИЕ              info|install|port|move-data|backup|restore|delete
       --package ПАКЕТ                Точный серверный пакет PostgreSQL
-      --pg-family СЕМЕЙСТВО          postgresql|postgrespro-ent|tantor-free
+      --pg-family СЕМЕЙСТВО          postgresql|postgrespro-ent|tantor-free|tantor-se|tantor-be
       --pg-version ВЕРСИЯ            Версия PostgreSQL, например 16
       --cluster-name ИМЯ             Имя создаваемого или целевого кластера
       --port ПОРТ                    Новый порт при install, port или restore
@@ -565,6 +565,8 @@ package_to_fields() {
         printf 'postgresql|%s\n' "${BASH_REMATCH[1]}"
     elif [[ "${package}" =~ ^tantor-free-server-([0-9]+)(-server)?$ ]]; then
         printf 'tantor-free|%s\n' "${BASH_REMATCH[1]}"
+    elif [[ "${package}" =~ ^tantor-(se|be)-server-([0-9]+)$ ]]; then
+        printf 'tantor-%s|%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
     else
         return 1
     fi
@@ -572,7 +574,7 @@ package_to_fields() {
 
 server_packages() {
     apt-cache pkgnames 2>/dev/null |
-        grep -E '^(postgrespro-ent-[0-9]+-server|postgresql-[0-9]+-server|tantor-free-server-[0-9]+(-server)?)$' |
+        grep -E '^(postgrespro-ent-[0-9]+-server|postgresql-[0-9]+-server|tantor-free-server-[0-9]+(-server)?|tantor-(se|be)-server-[0-9]+)$' |
         sort -u
 }
 
@@ -583,9 +585,19 @@ installed_server_packages() {
     done < <(
         dpkg-query -W -f='${binary:Package}\t${db:Status-Abbrev}\n' 2>/dev/null |
             awk '$2 == "ii" {sub(/:.*/, "", $1); print $1}' |
-            grep -E '^(postgrespro-ent-[0-9]+-server|postgresql-[0-9]+-server|tantor-free-server-[0-9]+(-server)?)$' |
+            grep -E '^(postgrespro-ent-[0-9]+-server|postgresql-[0-9]+-server|tantor-free-server-[0-9]+(-server)?|tantor-(se|be)-server-[0-9]+)$' |
             sort -u || true
     )
+}
+
+# Pro editions precede vanilla/Free; SE precedes BE even at a lower major.
+# PostgresPro Enterprise shares the top tier with SE; explicit choices win.
+server_family_priority() {
+    case "$1" in
+        tantor-se|postgrespro-ent) printf 1 ;;
+        tantor-be) printf 2 ;;
+        *) printf 3 ;;
+    esac
 }
 
 choose_from_packages() {
@@ -596,8 +608,8 @@ choose_from_packages() {
         for package in "${packages[@]}"; do
             fields="$(package_to_fields "${package}")" || continue
             version="${fields#*|}"
-            printf '%s|%s\n' "${version}" "${package}"
-        done | sort -t'|' -k1,1Vr -k2,2 | cut -d'|' -f2-
+            printf '%s|%s|%s\n' "$(server_family_priority "${fields%%|*}")" "${version}" "${package}"
+        done | sort -t'|' -k1,1n -k2,2Vr -k3,3 | cut -d'|' -f3-
     )
     ((${#ordered[@]})) || return 1
 
@@ -614,10 +626,10 @@ choose_from_packages() {
         for package in "${ordered[@]}"; do
             fields="$(package_to_fields "${package}")"
             version="${fields#*|}"
-            if [[ "${version}" != "${previous}" ]]; then
+            if [[ "$(server_family_priority "${fields%%|*}")|${version}" != "${previous}" ]]; then
                 ((version_priority += 1))
                 printf '\nPostgreSQL %s:\n' "${version}"
-                previous="${version}"
+                previous="$(server_family_priority "${fields%%|*}")|${version}"
             fi
             ((index += 1))
             printf '  %d - %s (приоритет %s)\n' "${index}" "${package}" "${version_priority}"
@@ -644,10 +656,10 @@ configure_selected_package() {
             PG_EXT="${PG_HOME}/lib"
             DATA_BASE="/var/lib/postgresql/${pg_ver}"
             ;;
-        tantor-free)
+        tantor-free|tantor-se|tantor-be)
             PG_HOME="/opt/tantor/db/${pg_ver}"
             PG_EXT="${PG_HOME}/lib/postgresql"
-            DATA_BASE="/var/lib/postgresql/tantor-free-${pg_ver}"
+            DATA_BASE="/var/lib/postgresql/${pg}-${pg_ver}"
             ;;
         postgresql)
             PG_HOME="/usr/lib/postgresql/${pg_ver}"
@@ -666,6 +678,7 @@ vendor_service_name() {
         postgrespro-ent-*-server) printf '%s' "${package%-server}" ;;
         tantor-free-server-*-server) printf '%s' "${package%-server}" ;;
         tantor-free-server-*) printf '%s' "${package}" ;;
+        tantor-se-server-*|tantor-be-server-*) printf '%s' "${package}" ;;
         *) return 1 ;;
     esac
 }
@@ -722,6 +735,7 @@ select_or_install_server() {
             case "${pg}" in
                 postgrespro-ent) package="postgrespro-ent-${pg_ver}-server" ;;
                 postgresql) package="postgresql-${pg_ver}-server" ;;
+                tantor-se|tantor-be) package="${pg}-server-${pg_ver}" ;;
                 tantor-free)
                     package="tantor-free-server-${pg_ver}-server"
                     if ! server_package_installed "${package}" && ! package_available "${package}"; then
@@ -770,7 +784,7 @@ select_or_install_server() {
             mapfile -t available < <(server_packages)
         fi
         ((${#available[@]})) || die "подходящие серверные пакеты отсутствуют в репозиториях"
-        choose_from_packages "Доступные серверные пакеты (приоритет 1 — самая новая версия):" "${available[@]}"
+        choose_from_packages "Доступные серверные пакеты (SE/Enterprise, BE, Free/PostgreSQL; затем версия):" "${available[@]}"
         install_package "${SELECTED_PACKAGE}"
     fi
     configure_selected_package
@@ -1435,10 +1449,12 @@ change_port_menu() {
 }
 
 default_cluster_data_base() {
-    local version="$1" data="$2" home
+    local version="$1" data="$2" home package fields
     home="$(cluster_pg_home "${version}" "${data}")"
     if [[ "${home}" == /opt/tantor/db/* ]]; then
-        printf '/var/lib/postgresql/tantor-free-%s' "${version}"
+        package="$(cluster_server_package "${version}" "${home}" "${data}")" || return 1
+        fields="$(package_to_fields "${package}")" || return 1
+        printf '/var/lib/postgresql/%s-%s' "${fields%%|*}" "${version}"
     else
         printf '/var/lib/postgresql/%s' "${version}"
     fi
@@ -1624,12 +1640,14 @@ cluster_pg_home() {
         postgres_command="${postgres_command%\"}"
         if [[ "${postgres_command}" == */bin/postgres && -x "${postgres_command}" ]]; then
             detected_home="${postgres_command%/bin/postgres}"
-            printf '%s' "${detected_home}"
+            readlink -f -- "${detected_home}"
             return 0
         fi
     fi
-    if [[ "${data}" == /var/lib/postgresql/tantor-free-* ]]; then
+    if [[ "${data}" == /var/lib/postgresql/tantor-free-* || "${data}" == /var/lib/postgresql/tantor-se-* || "${data}" == /var/lib/postgresql/tantor-be-* ]]; then
         printf '/opt/tantor/db/%s' "${version}"
+    elif [[ -L "/usr/lib/postgresql/${version}" && -x "/usr/lib/postgresql/${version}/bin/postgres" ]]; then
+        readlink -f -- "/usr/lib/postgresql/${version}"
     elif [[ -x "/opt/pgpro/ent-${version}/bin/postgres" ]]; then
         printf '/opt/pgpro/ent-%s' "${version}"
     else
@@ -1780,10 +1798,23 @@ write_common_backup_metadata() {
 }
 
 cluster_server_package() {
-    local version="$1" home="$2" data="$3" package
-    if [[ "${home}" == /opt/tantor/* || "${data}" == /var/lib/postgresql/tantor-free-* ]]; then
-        package="tantor-free-server-${version}-server"
-        package_installed "${package}" || package="tantor-free-server-${version}"
+    local version="$1" home="$2" data="$3" package owner fields
+    if [[ "${home}" == /opt/tantor/* ]]; then
+        # Editions share BINDIR. Identify its actual owner, never the preferred edition.
+        local -a owners=()
+        while IFS= read -r owner; do
+            package="${owner%%: /*}"
+            package="${package%%:*}"
+            fields="$(package_to_fields "${package}")" || continue
+            [[ "${fields}" == tantor-*"|${version}" ]] || continue
+            package_installed "${package}" || continue
+            owners+=("${package}")
+        done < <(dpkg-query -S "${home}/bin/postgres" 2>/dev/null | sort -u || true)
+        if ((${#owners[@]} != 1)); then
+            warn "не удалось однозначно определить пакет-владелец ${home}/bin/postgres"
+            return 1
+        fi
+        package="${owners[0]}"
     elif [[ "${home}" == /opt/pgpro/* ]]; then
         package="postgrespro-ent-${version}-server"
     else
@@ -2241,17 +2272,30 @@ put_postgresql_setting() {
     fi
 }
 
+# Registration labels are addresses, not evidence of the physical data version.
+cluster_backup_version() {
+    local registered="$1" data="$2" actual
+    IFS= read -r actual <"${data}/PG_VERSION" || return 1
+    [[ "${actual}" =~ ^[0-9]+$ ]] || return 1
+    if [[ "${actual}" != "${registered}" ]]; then
+        warn "кластер зарегистрирован как PostgreSQL ${registered}, данные имеют версию ${actual}; бэкап создаётся для PostgreSQL ${actual}"
+    fi
+    printf '%s' "${actual}"
+}
+
 make_cold_backup() {
     local version="$1" name="$2" port="$3" status="$4" owner="$5" data="$6" log="$7"
     local restart_after="${8:-no}" was_online=no
     local home reset_tool service_file archive timestamp meta_tmp rel cluster_package version_text
-    local backup_family
+    local backup_family backup_version
     local socket_dir metadata_started=no
     local -a paths=()
     prepare_backup_directory write
     timestamp="$(date +%Y%m%d-%H%M%S)"
-    archive="${backup_dir}/$(backup_archive_name "${version}" "${name}" "${timestamp}")"
+    backup_version="$(cluster_backup_version "${version}" "${data}")" || die "не удалось определить версию данных кластера"
+    archive="${backup_dir}/$(backup_archive_name "${backup_version}" "${name}" "${timestamp}")"
     home="$(cluster_pg_home "${version}" "${data}")"
+    cluster_package="$(cluster_server_package "${backup_version}" "${home}" "${data}")" || die "не определён серверный пакет кластера"
     service_file="$(cluster_service_file "${version}" "${name}" || true)"
 
     if [[ "${status}" != online* ]]; then
@@ -2297,17 +2341,17 @@ make_cold_backup() {
     [[ -n "${service_file}" ]] && paths+=("${service_file#/}")
     ((${#paths[@]})) || die "нечего помещать в резервную копию"
 
-    cluster_package="$(cluster_server_package "${version}" "${home}" "${data}")"
     IFS='|' read -r backup_family _ < <(package_to_fields "${cluster_package}") || die \
         "не удалось определить семейство серверного пакета ${cluster_package}"
     version_text="$("${home}/bin/postgres" --version)"
     CLEANUP_DIR="$(mktemp -d /tmp/create-claster.backup.XXXXXX)"
     meta_tmp="${CLEANUP_DIR}"
     {
-        write_deb_rebuild_command 3 "${backup_family}" "${version}" "${cluster_package}" \
+        write_deb_rebuild_command 3 "${backup_family}" "${backup_version}" "${cluster_package}" \
             "${name}" "${port}" "${data}" "${archive}"
-        write_common_backup_metadata cold "${version}" "${name}" "${port}" "${version_text}" \
+        write_common_backup_metadata cold "${backup_version}" "${name}" "${port}" "${version_text}" \
             "${backup_family}"
+        printf 'registered_pg_version=%q\n' "${version}"
         printf 'package=%q\n' "${cluster_package}"
         printf 'cluster_owner=%q\n' "${owner}"
         printf 'data_dir=%q\n' "${data}"
@@ -2333,12 +2377,14 @@ make_hot_backup() {
     local version="$1" cluster="$2" port="$3" status="$4" data="$5" database="$6"
     local database_verified="${7:-no}"
     local home socket_dir timestamp archive dump_name stage version_text database_number database_index archive_mode
-    local cluster_package backup_family
+    local cluster_package backup_family backup_version
     prepare_backup_directory write
     [[ "${status}" == online* ]] || die "для горячего бэкапа кластер ${version}/${cluster} должен быть запущен"
     validate_database_name "${database}" || die "недопустимое имя базы данных: ${database}"
     home="$(cluster_pg_home "${version}" "${data}")"
     [[ -x "${home}/bin/pg_dump" ]] || die "не найден ${home}/bin/pg_dump"
+    backup_version="$(cluster_backup_version "${version}" "${data}")" || die "не удалось определить версию данных кластера"
+    cluster_package="$(cluster_server_package "${backup_version}" "${home}" "${data}")" || die "не определён серверный пакет кластера"
     socket_dir="$(cluster_socket_directory "${port}")" || die \
         "не найден Unix-сокет запущенного кластера ${version}/${cluster} на порту ${port}"
     if [[ "${database_verified}" != yes ]]; then
@@ -2347,8 +2393,8 @@ make_hot_backup() {
     fi
 
     timestamp="$(date +%Y%m%d-%H%M%S)"
-    archive="${backup_dir}/$(hot_backup_archive_name "${version}" "${database}" "${timestamp}")"
-    dump_name="$(hot_backup_dump_name "${version}" "${database}" "${timestamp}")"
+    archive="${backup_dir}/$(hot_backup_archive_name "${backup_version}" "${database}" "${timestamp}")"
+    dump_name="$(hot_backup_dump_name "${backup_version}" "${database}" "${timestamp}")"
     CLEANUP_DIR="$(mktemp -d /tmp/create-claster.hot-backup.XXXXXX)"
     stage="${CLEANUP_DIR}"
     chown postgres:postgres "${stage}"
@@ -2365,15 +2411,15 @@ make_hot_backup() {
     database_index=$((database_number - 1))
     load_hot_backup_roles "${home}" "${socket_dir}" "${port}" "${database}" || die \
         "не удалось получить роли базы данных ${database}"
-    cluster_package="$(cluster_server_package "${version}" "${home}" "${data}")"
     IFS='|' read -r backup_family _ < <(package_to_fields "${cluster_package}") || die \
         "не удалось определить семейство серверного пакета ${cluster_package}"
     version_text="$("${home}/bin/postgres" --version)"
     {
-        write_deb_rebuild_command 4 "${backup_family}" "${version}" "${cluster_package}" \
+        write_deb_rebuild_command 4 "${backup_family}" "${backup_version}" "${cluster_package}" \
             "${cluster}" "${port}" "${data}" "${archive}" "${database}"
-        write_common_backup_metadata hot "${version}" "${cluster}" "${port}" "${version_text}" \
+        write_common_backup_metadata hot "${backup_version}" "${cluster}" "${port}" "${version_text}" \
             "${backup_family}"
+        printf 'registered_pg_version=%q\n' "${version}"
         printf 'package=%q\n' "${cluster_package}"
         printf 'data_dir=%q\n' "${data}"
         write_hot_database_metadata "${database}" "${database_index}"
@@ -2799,13 +2845,16 @@ restore_menu() {
     stage="${CLEANUP_DIR}"
     printf '%s\n' "${info}" >"${stage}/backup-info.env"
     # shellcheck source=/dev/null
+    local registered_pg_version=""
     source "${stage}/backup-info.env"
     version="${pg_version:?}"
     original_name="${cluster_name:?}"
     original_port="${cluster_port:?}"
     original_data_dir="${data_dir:?}"
     package="${package:?}"
-    original_conf_dir="/etc/postgresql/${version}/${original_name}"
+    registered_pg_version="${registered_pg_version:-${version}}"
+    [[ "${registered_pg_version}" =~ ^[0-9]+$ ]] || die "недопустимая версия регистрации в бэкапе"
+    original_conf_dir="/etc/postgresql/${registered_pg_version}/${original_name}"
     validate_identifier "${original_name}" || die "в метаданных бэкапа недопустимое имя кластера"
     [[ "${original_data_dir}" == */"${original_name}" ]] || die "каталог данных в бэкапе не соответствует имени кластера"
 
@@ -2876,6 +2925,8 @@ restore_menu() {
         transform_args+=(--transform "s#-${original_name}\\.service\$#-${restore_name}.service#")
         transform_args+=(--transform "s#-${original_name}\\.log\$#-${restore_name}.log#")
     fi
+    transform_args+=(--transform "s#^root/etc/postgresql/${registered_pg_version}/#root/etc/postgresql/${version}/#")
+    transform_args+=(--transform "s#postgresql@${registered_pg_version}-#postgresql@${version}-#g")
     tar "${transform_args[@]}" --keep-directory-symlink -xzf "${archive}" -C / --strip-components=1 \
         --exclude='root/backup-info.env'
 
@@ -2918,7 +2969,7 @@ EOF
     fi
     replace_literal_in_file "${original_data_dir}" "${restore_data_dir}" "${restore_service_file}"
     replace_literal_in_file "${original_conf_dir}" "${restore_conf_dir}" "${restore_service_file}"
-    replace_literal_in_file "${version}-${original_name}" "${version}-${restore_name}" "${restore_service_file}"
+    replace_literal_in_file "${registered_pg_version}-${original_name}" "${version}-${restore_name}" "${restore_service_file}"
     cp -f -- "${restore_service_file}" "/.postgres/systemd/save/$(basename -- "${restore_service_file}")"
     ensure_symlink "${restore_service_file}" "/.postgres/systemd/$(basename -- "${restore_service_file}")"
     systemctl daemon-reload
@@ -3065,7 +3116,9 @@ main() {
         info_menu
         return 0
     fi
-    if [[ "${ACTION}" != restore || "${NON_INTERACTIVE}" == 0 ]]; then
+    # Backups resolve the existing cluster's binaries; do not select/install a
+    # different edition from global defaults when invoked by the cron wrapper.
+    if [[ "${NON_INTERACTIVE}" == 0 || ("${ACTION}" != restore && "${ACTION}" != backup) ]]; then
         select_or_install_server
         prepare_postgres_root
     fi

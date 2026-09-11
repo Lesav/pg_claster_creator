@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-09" "pg_claster_creator 2.1.3" "Команды разработчика"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-11" "pg_claster_creator 2.2.0" "Команды разработчика"
 .SH ИМЯ
 create-claster-deb.sh \- сборка Debian-пакетов claster-creator
 .SH СИНТАКСИС
@@ -99,7 +99,7 @@ contrib.
 Выбрать режим 1, 2, 3 или 4.
 .TP
 .BI "--pg-family " СЕМЕЙСТВО
-Выбрать postgresql, postgrespro-ent или tantor-free.
+Выбрать postgresql, postgrespro-ent, tantor-free, tantor-se (Special Edition) или tantor-be (Basic Edition).
 .TP
 .BI "--pg-version " ВЕРСИЯ
 Задать основную версию PostgreSQL. Для автоматического пакета PostgreSQL Pro
@@ -204,7 +204,8 @@ claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-БД.deb
 .TP
 .I /usr/local/share/pg_claster_creator/TEST-2.1.2-journal-passed.md
 Обязательный журнал проверки, устанавливаемый во всех режимах с правами 0644.
-Версия 2.1.3 меняет упаковку и использует неизменённые результаты проверки 2.1.2.
+Версия 2.2.0 добавляет Tantor SE/BE и определение фактической версии бэкапа.
+Включённый журнал 2.1.2 является историческим и не подтверждает новые функции.
 .TP
 .I /usr/local/share/pg_claster_creator/create-claster-deb.sh
 Установленный сборщик. Ссылка команды в
