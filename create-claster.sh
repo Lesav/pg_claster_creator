@@ -27,7 +27,8 @@
 #              a cold cluster backup or hot database backup before deletion.
 #   Interactive menu item 3 selects a cluster, then offers the opposite of its
 #   current state with explicit y/N confirmation; no separate action selection.
-#   Interactive menu item 4 additionally renames a cluster with pg_renamecluster,
+#   Interactive menu item 4 opens the Edit submenu: rename, port, data location.
+#   Renaming uses pg_renamecluster,
 #   preserving its online/offline state and updating project-specific units.
 #   Database/role names and external cron jobs are not renamed.
 #
@@ -76,7 +77,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.3.1"
+readonly SCRIPT_VERSION="2.3.2"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -169,7 +170,8 @@ usage() {
 --action или PGCC_ACTION, меню и подтверждения отключаются. Недостающий
 обязательный параметр в таком режиме считается ошибкой.
 Интерактивный пункт 3 — Остановить/Запустить: кластер, действие по состоянию, y/N.
-Интерактивный пункт 4 — Переименовать: проверка нового имени, остановка,
+Интерактивный пункт 4 — Изменить: переименование, переключение порта, перенос данных.
+Переименовать: проверка нового имени, остановка,
 переименование регистрации/путей и служб; исходное состояние запуска сохраняется.
 Имена БД/ролей и задания cron не переименовываются.
 При неинтерактивном install занятый порт автоматически заменяется первым
@@ -3297,6 +3299,26 @@ info_menu() {
     done
 }
 
+change_cluster_menu() {
+    local choice
+    while true; do
+        header
+        step "Кластер: Изменить"
+        printf '%s\n' \
+            '0 - Вернуться назад' \
+            '1 - Кластер: Переименовать' \
+            '2 - Кластер: Переключить порт' \
+            '3 - Кластер: Переместить данные'
+        read -r -p "Выбор: " choice || return 0
+        case "${choice}" in
+            1) rename_cluster_menu ;;
+            2) change_port_menu ;;
+            3) move_cluster_data_menu ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
 main_menu() {
     local choice skip_first_header="${1:-0}"
     while true; do
@@ -3311,24 +3333,20 @@ main_menu() {
             '1 - Информация: о развернутых кластерах' \
             '2 - Кластер: Установить' \
             '3 - Кластер: Остановить/Запустить' \
-            '4 - Кластер: Переименовать' \
-            '5 - Кластер: Переключить порт' \
-            '6 - Кластер: Переместить данные' \
-            '7 - Кластер: Бэкап' \
-            '8 - Кластер: Рестори' \
-            '9 - Кластер: Удалить'
+            '4 - Кластер: Изменить' \
+            '5 - Кластер: Бэкап' \
+            '6 - Кластер: Рестори' \
+            '7 - Кластер: Удалить'
         read -r -p "Выбор: " choice || exit 0
         case "${choice}" in
             0) exit 0 ;;
             1) info_menu ;;
             2) install_menu ;;
             3) cluster_power_menu ;;
-            4) rename_cluster_menu ;;
-            5) change_port_menu ;;
-            6) move_cluster_data_menu ;;
-            7) backup_menu ;;
-            8) restore_menu ;;
-            9) delete_menu ;;
+            4) change_cluster_menu ;;
+            5) backup_menu ;;
+            6) restore_menu ;;
+            7) delete_menu ;;
             *) clear 2>/dev/null || true; exit 0 ;;
         esac
     done

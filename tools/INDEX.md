@@ -4,3 +4,4 @@ prx-test-tantor-editions.sh — test Tantor edition and physical backup version 
 prx-build-release-local.sh — build and verify a release DEB on a Linux filesystem
 prx-test-cluster-power.sh — test state-based interactive cluster start/stop
 prx-test-cluster-rename.sh — test cluster rename with isolated filesystem and service fixtures
+prx-test-edit-menu.sh — test main/edit menu navigation and dispatch
