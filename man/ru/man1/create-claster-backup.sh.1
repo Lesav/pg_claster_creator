@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-BACKUP.SH 1 "2026-09-12" "pg_claster_creator 2.4.3" "Команды пользователя"
+.TH CREATE-CLASTER-BACKUP.SH 1 "2026-09-12" "pg_claster_creator 2.5.1" "Команды пользователя"
 .SH ИМЯ
 create-claster-backup.sh \- неинтерактивный горячий бэкап и ротация архивов БД
 .SH СИНТАКСИС
@@ -62,6 +62,11 @@ create-claster-backup.sh \- неинтерактивный горячий бэк
 .BR --cron .
 Вывод дописывается в соответствующий
 .IR /var/log/pg-claster-backup-*.log .
+.SH ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
+Собственных ENV-аналогов аргументов у wrapper нет. Используйте позиционные
+аргументы версии, кластера, БД и ключи хранения/ротации. PGCC_* — интерфейс
+вызываемого create-claster.sh, не замена аргументов wrapper.
+SQL-файлы и --sql-file не поддерживаются.
 .SH ФАЙЛЫ
 .TP
 .I /usr/local/shared/pg_claster_creator/.new-claster.config

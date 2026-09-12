@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Purpose: regression-test Tantor edition selection without modifying clusters.
+# Purpose: regression-test PostgreSQL package names and Tantor editions without modifying clusters.
 # Usage: bash tools/prx-test-tantor-editions.sh REPO
 # Args: REPO -- project directory containing the three scripts.
 # Output: assertions for package discovery, priorities, metadata and DEB helpers.
@@ -66,6 +66,28 @@ assert() { [[ "$1" == "$2" ]] || { printf 'FAIL: %s != %s\n' "$1" "$2" >&2; exit
     assert "$(package_to_fields tantor-se-server-17)" 'tantor-se|17'
     assert "$(package_to_fields tantor-be-server-18)" 'tantor-be|18'
     assert "$(package_to_fields tantor-free-server-16-server)" 'tantor-free|16'
+    assert "$(package_to_fields postgresql-16)" 'postgresql|16'
+    assert "$(package_to_fields postgresql-16-server)" 'postgresql|16'
+    assert "$(server_family_priority tantor-free)" 3
+    assert "$(server_family_priority postgresql)" 3
+    choose_from_packages shared-tier postgresql-18 tantor-free-server-16 <<<1 >/dev/null
+    assert "$SELECTED_PACKAGE" postgresql-18
+    choose_from_packages shared-tier-reverse postgresql-16 tantor-free-server-18 <<<1 >/dev/null
+    assert "$SELECTED_PACKAGE" tantor-free-server-18
+    choose_from_packages shared-tier-tie postgresql-16 tantor-free-server-16 <<<1 >/dev/null
+    assert "$SELECTED_PACKAGE" postgresql-16
+    for bad in postgresql postgresql-contrib postgresql-contrib-16 postgresql-client-16 postgresql-16-pgaudit postgresql-16-server-dbgsym; do
+        ! package_to_fields "$bad"
+    done
+    (
+        package_installed() { [[ "$1" == postgresql-16-server ]]; }
+        package_available() { return 0; }
+        assert "$(vanilla_server_package 16)" postgresql-16-server
+        package_installed() { return 1; }
+        assert "$(vanilla_server_package 16)" postgresql-16
+        package_available() { [[ "$1" == postgresql-16-server ]]; }
+        assert "$(vanilla_server_package 16)" postgresql-16-server
+    )
     ! package_to_fields tantor-se-client-17
     ! package_to_fields tantor-be-server-18-dbgsym
     assert "$(vendor_service_name tantor-se-server-17)" tantor-se-server-17
@@ -90,20 +112,36 @@ assert() { [[ "$1" == "$2" ]] || { printf 'FAIL: %s != %s\n' "$1" "$2" >&2; exit
     ) </dev/null >"$fixture/package-eof"
     ! grep -q UNEXPECTED_CONTINUATION "$fixture/package-eof"
     printf 'OK: package choice exits on zero/invalid/empty/EOF without retrying\n'
-    apt-cache() { printf '%s\n' tantor-se-server-17 tantor-be-server-18 tantor-be-client-18 postgresql-server-dev-18 tantor-free-server-16; }
-    assert "$(server_packages | wc -l)" 3
+    apt-cache() { printf '%s\n' tantor-se-server-17 tantor-be-server-18 tantor-be-client-18 postgresql-server-dev-18 tantor-free-server-16 postgresql-16 postgresql-16-server postgresql-client-16 postgresql-contrib postgresql-16-pgaudit; }
+    assert "$(server_packages | wc -l)" 5
     package_installed() { return 0; }
     dpkg-query() { printf 'tantor-be-server-18:amd64: /opt/tantor/db/18/bin/postgres\n'; }
     assert "$(cluster_server_package 18 /opt/tantor/db/18 /DATA/pg_18/demo)" tantor-be-server-18
     dpkg-query() { printf 'tantor-se-server-18: /opt/tantor/db/18/bin/postgres\n'; }
     assert "$(cluster_server_package 18 /opt/tantor/db/18 /DATA/pg_18/demo)" tantor-se-server-18
+    dpkg-query() { printf 'postgresql-16: /usr/lib/postgresql/16/bin/postgres\n'; }
+    assert "$(cluster_server_package 16 /usr/lib/postgresql/16 /fixture/data)" postgresql-16
+    dpkg-query() { printf 'postgresql-16-server:amd64: /usr/lib/postgresql/16/bin/postgres\n'; }
+    assert "$(cluster_server_package 16 /usr/lib/postgresql/16 /fixture/data)" postgresql-16-server
     dpkg-query() { return 1; }
     ! cluster_server_package 18 /opt/tantor/db/18 /DATA/pg_18/demo
-    printf 'OK: discovery, SE > BE > Free, versions, services, owner metadata\n'
+    ! cluster_server_package 16 /usr/lib/postgresql/16 /fixture/data
+    printf 'OK: discovery, SE/Enterprise > BE > Free/PostgreSQL, versions, services, owner metadata\n'
 )
 sed '/^main "\$@"$/d' "$repo/create-claster-deb.sh" >"$fixture/builder.sh"
 (
     source "$fixture/builder.sh"
+    (
+        pg=postgresql; pg_ver=16
+        dpkg-query() { return 1; }
+        apt-cache() { printf '  Candidate: 16.15\n'; }
+        assert "$(default_server_package)" postgresql-16
+        dpkg-query() { [[ "${*: -1}" == postgresql-16-server ]] && printf 'ii '; }
+        assert "$(default_server_package)" postgresql-16-server
+        MODE=5; SERVER_PACKAGE=postgresql-16; PREFER_NEWEST_SERVER=no
+        assert "$(dependency_list)" 'postgresql-common, postgresql-16'
+        assert "$(infer_family_from_package postgresql-16)" postgresql
+    )
     (
         MODE=""; pg=tantor-be; pg_ver=18; cls_nm=demo; cls_ch=demo
         cls_us=demo; cls_pw=demo; cls_pt=5432; SERVER_PACKAGE=""; DATA_ROOT=""

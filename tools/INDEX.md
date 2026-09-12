@@ -23,3 +23,5 @@ prx-test-live-ui.sh — test real rename, ENV, generated cron commands and datab
 prx-test-full-contracts.sh — test argument, dependency and size contracts without changing services
 prx-test-live-edges.sh — test restore edge cases with archive and parent metadata checks
 prx-test-screen-log-permissions.py — test TTY output, cold log permissions and legacy archive metadata
+prx-test-deb-sql.sh — test mode-5 selection, payload, deployment guards and optional real SQL
+prx-test-menu-sql.sh — test interactive SQL navigation, confirmation and target guards

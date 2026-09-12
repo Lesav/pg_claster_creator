@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-BACKUP.SH 1 "2026-09-12" "pg_claster_creator 2.4.3" "User Commands"
+.TH CREATE-CLASTER-BACKUP.SH 1 "2026-09-12" "pg_claster_creator 2.5.1" "User Commands"
 .SH NAME
 create-claster-backup.sh \- create and rotate non-interactive hot database backups
 .SH SYNOPSIS
@@ -65,6 +65,11 @@ runs as root, and calls this program without
 .BR --cron .
 Output is appended to the matching
 .IR /var/log/pg-claster-backup-*.log .
+.SH ENVIRONMENT
+There are no dedicated environment equivalents of this wrapper's arguments.
+Use VERSION CLUSTER DATABASE and the documented backup/retention options.
+PGCC_* is the delegated create-claster.sh interface, not a replacement for
+wrapper arguments. SQL files and --sql-file are not supported.
 .SH FILES
 .TP
 .I /usr/local/shared/pg_claster_creator/.new-claster.config

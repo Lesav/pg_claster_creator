@@ -10,7 +10,8 @@
 #   version, cluster name, and database name. The backup directory can be set
 #   explicitly or inherited from .new-claster.config.
 #   PostgreSQL, PostgresPro Enterprise and Tantor Free/SE/BE are resolved by
-#   create-claster.sh from the existing cluster, not from a preferred edition.
+#   create-claster.sh from the existing cluster, not from a preferred edition;
+#   this includes Debian/Ubuntu/Mint postgresql-N server packages.
 #
 # Backup and retention behavior:
 #   A normal invocation creates one custom-format hot backup. After a successful
@@ -42,6 +43,13 @@
 #   CLUSTER                 Existing cluster name, for example subsys.
 #   DATABASE                Existing database name, for example asvd.
 #
+# Environment interface:
+#   No dedicated environment variables replace this wrapper's arguments.
+#   Use VERSION CLUSTER DATABASE and --backup-dir/--files-cnt/--files-size.
+#   The default backup directory comes from the selected configuration file.
+#   PGCC_* belongs to the delegated create-claster.sh interface, not this wrapper.
+#   SQL files are not accepted: this command creates hot backups only.
+#
 # Exit and safety rules:
 #   Configuration: prefer /usr/local/shared/pg_claster_creator/.new-claster.config;
 #   only if absent, read .new-claster.config beside the resolved script.
@@ -54,7 +62,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-backup.sh"
-readonly SCRIPT_VERSION="2.4.3"
+readonly SCRIPT_VERSION="2.5.1"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
 readonly INSTALLED_CONFIG_FILE="/usr/local/shared/pg_claster_creator/.new-claster.config"
@@ -106,6 +114,11 @@ usage() {
 
 Конфиг: /usr/local/shared/pg_claster_creator/.new-claster.config;
 при отсутствии — .new-claster.config рядом с разрешённым сценарием.
+
+Переменные окружения: собственных аналогов аргументов у wrapper нет.
+Версию, кластер, БД и параметры хранения передавайте аргументами;
+PGCC_* — интерфейс основного create-claster.sh, не замена аргументов wrapper.
+SQL-файлы и --sql-file не поддерживаются: сценарий создаёт горячие бэкапы.
 
 Примеры:
   sudo ${SCRIPT_NAME} 16 subsys asvd

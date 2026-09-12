@@ -19,20 +19,21 @@ SELECTED_PACKAGE=tantor-se-server-17
 rename_cluster_menu() { printf 'rename\n' >>"$fixture/events"; }
 change_port_menu() { printf 'port\n' >>"$fixture/events"; }
 move_cluster_data_menu() { printf 'data\n' >>"$fixture/events"; }
+execute_sql_menu() { printf 'sql\n' >>"$fixture/events"; }
 backup_menu() { printf 'backup\n' >>"$fixture/events"; }
 restore_menu() { printf 'restore\n' >>"$fixture/events"; }
 delete_menu() { printf 'delete\n' >>"$fixture/events"; }
-(main_menu <<<$'4\n1\n2\n3\n0\n5\n6\n7\n0') >"$fixture/output"
-[[ "$(<"$fixture/events")" == $'rename\nport\ndata\nbackup\nrestore\ndelete' ]]
+(main_menu <<<$'4\n1\n2\n3\n4\n0\n5\n6\n7\n0') >"$fixture/output"
+[[ "$(<"$fixture/events")" == $'rename\nport\ndata\nsql\nbackup\nrestore\ndelete' ]]
 grep -q '^4 - Кластер: Изменить$' "$fixture/output"
 grep -Fxq 'Выбор действия: <tantor-se-server-17>' "$fixture/output"
 ! grep -q '^8 - ' "$fixture/output"
-[[ "$(grep -c '^Кластер: Изменить$' "$fixture/output")" == 4 ]]
+[[ "$(grep -c '^Кластер: Изменить$' "$fixture/output")" == 5 ]]
 for input in 0 9 invalid ''; do
     change_cluster_menu <<<"$input" >/dev/null
 done
 change_cluster_menu </dev/null >/dev/null
-[[ "$(wc -l <"$fixture/events")" == 6 ]]
+[[ "$(wc -l <"$fixture/events")" == 7 ]]
 SELECTED_PACKAGE=tantor-free-server-16
 (main_menu <<<0) >"$fixture/output"
 grep -Fxq 'Выбор действия: <tantor-free-server-16>' "$fixture/output"

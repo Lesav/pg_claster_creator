@@ -11,6 +11,7 @@ work="$(mktemp -d /tmp/pgcc-contracts.XXXXXX)"
 trap 'rm -rf -- "$work"' EXIT
 sed '/^main "\$@"$/d' "$repo/create-claster-deb.sh" >"$work/builder.sh"
 touch "$work/content"
+printf 'SELECT 42;\n' >"$work/schema.sql"
 tar -czf "$work/16-qa-20260912-010101.tar.gz" -C "$work" content
 cp "$work/16-qa-20260912-010101.tar.gz" "$work/16-qa-20260912-010101-dmp.tar.gz"
 check() {
@@ -59,6 +60,7 @@ builder_valid() {
     builder_defaults; MODE="$1"
     [[ "$MODE" != 3 ]] || BACKUP_FILE="$work/16-qa-20260912-010101.tar.gz"
     [[ "$MODE" != 4 ]] || BACKUP_FILE="$work/16-qa-20260912-010101-dmp.tar.gz"
+    [[ "$MODE" != 5 ]] || SQL_FILE="$work/schema.sql"
     [[ "${2:-}" != relative ]] || { cd "$work"; BACKUP_FILE="${BACKUP_FILE##*/}"; }
     validate_options
     printf 'VALID %s %s\n' "$MODE" "$(package_basename)"
@@ -67,6 +69,7 @@ builder_bad() {
     builder_defaults; MODE="$1"
     [[ "$MODE" != 3 ]] || BACKUP_FILE="$work/16-qa-20260912-010101.tar.gz"
     [[ "$MODE" != 4 ]] || BACKUP_FILE="$work/16-qa-20260912-010101-dmp.tar.gz"
+    [[ "$MODE" != 5 ]] || SQL_FILE="$work/schema.sql"
     printf -v "$2" '%s' "$3"
     validate_options
 }
@@ -123,7 +126,7 @@ main_bad() {
 check DEB-DEPS 0 dependencies
 for bad in 'curl (>= 1)' 'curl;id' 'Bad' 'curl,,jq' '/tmp/x'; do check "DEB-DEP-BAD-$(printf '%s' "$bad" | cksum | cut -d' ' -f1)" nonzero dependency_bad "$bad"; done
 check DEB-DEP-MODE1 nonzero mode1_dep
-for mode in 2 3 4; do
+for mode in 2 3 4 5; do
     check "DEB-VALID-$mode" 0 builder_valid "$mode"
     for field in pg pg_ver cls_nm cls_ch cls_us cls_pw cls_pt; do check "DEB-EMPTY-$mode-$field" nonzero builder_bad "$mode" "$field" ''; done
     check "DEB-DATA-RELATIVE-$mode" nonzero builder_bad "$mode" DATA_ROOT relative/path
@@ -133,6 +136,8 @@ for mode in 3 4; do
     check "DEB-NO-ARCHIVE-$mode" nonzero builder_bad "$mode" BACKUP_FILE ''
 done
 check DEB-NO-DATABASE-4 nonzero builder_bad 4 DATABASE_NAME ''
+check DEB-NO-DATABASE-5 nonzero builder_bad 5 DATABASE_NAME ''
+check DEB-NO-SQL-5 nonzero builder_bad 5 SQL_FILE ''
 check DEB-WRONG-HOT nonzero builder_bad 3 BACKUP_FILE "$work/16-qa-20260912-010101-dmp.tar.gz"
 check DEB-WRONG-COLD nonzero builder_bad 4 BACKUP_FILE "$work/16-qa-20260912-010101.tar.gz"
 check BK-SIZES 0 sizes

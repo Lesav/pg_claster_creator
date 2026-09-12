@@ -20,7 +20,14 @@ dpkg-deb -e "$package" "$work/control"
 [[ ! -f "$work/control/postinst" ]]
 pg_lsclusters --no-header >"$work/clusters-before"
 cp "$work/clusters-before" "$logs/clusters-before.log"
-sha256sum /usr/local/shared/pg_claster_creator/.new-claster.config /usr/local/share/pg_claster_creator/.new-claster.config >"$work/config.sha"
+: >"$work/config.sha"
+for config in /usr/local/shared/pg_claster_creator/.new-claster.config /usr/local/share/pg_claster_creator/.new-claster.config; do
+    if [[ -e "$config" || -L "$config" ]]; then
+        sha256sum "$config" >>"$work/config.sha"
+    elif [[ "$config" == /usr/local/shared/* ]]; then
+        touch "$work/shared-config-absent"
+    fi
+done
 sha256sum "$package"
 timeout -k 5 180 dpkg --force-confdef --force-confold -i "$package"
 dpkg-query -W -f='${Status} ${Version}\n' claster-creator | tee "$work/status"
@@ -34,7 +41,10 @@ for name in create-claster.sh create-claster-backup.sh; do
     [[ "$(readlink -f "/usr/local/bin/$name")" == "/usr/local/share/pg_claster_creator/$name" ]]
 done
 cmp "$repo/TEST-$journal_version-journal-passed.md" "/usr/local/share/pg_claster_creator/TEST-$journal_version-journal-passed.md"
-sha256sum -c "$work/config.sha"
+[[ ! -s "$work/config.sha" ]] || sha256sum -c "$work/config.sha"
+if [[ -f "$work/shared-config-absent" ]]; then
+    [[ ! -e /usr/local/shared/pg_claster_creator/.new-claster.config && ! -L /usr/local/shared/pg_claster_creator/.new-claster.config ]]
+fi
 pg_lsclusters --no-header >"$logs/clusters-after.log"
 cmp "$work/clusters-before" "$logs/clusters-after.log"
 dpkg --audit >"$work/audit"

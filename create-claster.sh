@@ -8,8 +8,12 @@
 #   Prepare a PostgreSQL server installed from APT repositories and manage
 #   PostgreSQL clusters on Astra Linux and compatible Debian-based systems.
 #   The script supports PostgreSQL, Postgres Pro Enterprise, and Tantor Free/SE/BE.
+#   Vanilla Debian/Ubuntu/Mint servers use postgresql-N; legacy postgresql-N-server
+#   layouts remain accepted. Client/contrib/meta/extension packages are not servers.
 #   It can run as an interactive menu or as a fully non-interactive command.
 #   Screen clearing is limited to stdout terminals with a usable TERM.
+#   Edit menu item 4 executes a trusted SQL file on a selected existing database,
+#   only after explicit confirmation. psql runs as postgres with ON_ERROR_STOP.
 #   Cold restore resets only /var/log/postgresql to root:postgres 1775 after
 #   extraction, before startup; existing log-file permissions are not changed.
 #   The main menu heading shows the selected server package for new clusters.
@@ -34,7 +38,8 @@
 #              a cold cluster backup or hot database backup before deletion.
 #   Interactive menu item 3 selects a cluster, then offers the opposite of its
 #   current state with explicit y/N confirmation; no separate action selection.
-#   Interactive menu item 4 opens the Edit submenu: rename, port, data location.
+#   Interactive menu item 4 opens the Edit submenu: rename, port, data location,
+#   execute SQL. SQL execution is interactive only: no --action sql or --sql-file.
 #   Renaming uses pg_renamecluster with child-scoped PG_CLUSTER_CONF_ROOT,
 #   preserves state/autostart and rewrites complete paths only once. Effective
 #   data/HBA/ident paths are checked before start; standard log links are updated.
@@ -75,6 +80,9 @@
 #   PGCC_DB_PASSWORD, PGCC_DATA_ROOT, PGCC_BACKUP_DIR, PGCC_BACKUP_FILE,
 #   PGCC_BACKUP_TYPE, PGCC_DATABASE, PGCC_BACKUP_BEFORE_DELETE,
 #   PGCC_CLEAR_WAL, and PGCC_OVERWRITE mirror the command-line options.
+#   PGCC_CLUSTER_PORT maps to --port; PGCC_DB_USER to --user;
+#   PGCC_DB_PASSWORD to --password; PGCC_DATABASE to --database.
+#   There is no PGCC_SQL_FILE input. Select the SQL file in the Edit menu.
 #
 # Configuration:
 #   Defaults are loaded from /usr/local/shared/pg_claster_creator/.new-claster.config
@@ -87,7 +95,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.4.3"
+readonly SCRIPT_VERSION="2.5.1"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -180,7 +188,14 @@ usage() {
 --action или PGCC_ACTION, меню и подтверждения отключаются. Недостающий
 обязательный параметр в таком режиме считается ошибкой.
 Интерактивный пункт 3 — Остановить/Запустить: кластер, действие по состоянию, y/N.
-Интерактивный пункт 4 — Изменить: переименование, переключение порта, перенос данных.
+Для Debian/Ubuntu/Mint сервер — postgresql-N, например --package postgresql-16.
+Совместимые имена postgresql-N-server также поддерживаются.
+Интерактивный пункт 4 — Изменить: переименование, переключение порта, перенос данных,
+выполнение SQL (подпункт 4). Выберите кластер, существующую БД, номер .sql в
+каталоге бэкапов либо относительный/абсолютный путь. 0 — на предыдущий шаг.
+SQL выполняется от postgres только после y/Y; Enter — отказ. При ошибке psql
+останавливается, вывод остаётся до Enter; возможны частичные изменения.
+SQL доступен только через меню: --action sql и --sql-file не поддерживаются.
 Переименовать: проверка нового имени, остановка,
 переименование регистрации/путей и служб; исходное состояние запуска сохраняется.
 До запуска проверяются пути data/HBA/ident; автозапуск переносится без enable/disable.
@@ -233,6 +248,10 @@ usage() {
   PGCC_DB_PASSWORD, PGCC_DATA_ROOT, PGCC_BACKUP_DIR, PGCC_BACKUP_FILE,
   PGCC_BACKUP_TYPE, PGCC_DATABASE,
   PGCC_BACKUP_BEFORE_DELETE, PGCC_CLEAR_WAL, PGCC_OVERWRITE.
+Приоритет значений: ключи командной строки > PGCC_* > значения конфига.
+PGCC_CLUSTER_PORT соответствует --port, PGCC_DB_USER — --user,
+PGCC_DB_PASSWORD — --password, PGCC_DATABASE — --database.
+Переменной PGCC_SQL_FILE нет; SQL-файл выбирается интерактивно.
 
 Примеры:
   ${SCRIPT_NAME}
@@ -592,11 +611,23 @@ ensure_postgresql_common() {
     install_package postgresql-common
 }
 
+vanilla_server_package() {
+    local version="$1" candidate
+    # Preserve an installed package layout; otherwise prefer Debian's canonical name.
+    for candidate in "postgresql-${version}" "postgresql-${version}-server"; do
+        package_installed "${candidate}" && { printf '%s' "${candidate}"; return 0; }
+    done
+    for candidate in "postgresql-${version}" "postgresql-${version}-server"; do
+        package_available "${candidate}" && { printf '%s' "${candidate}"; return 0; }
+    done
+    printf 'postgresql-%s' "${version}"
+}
+
 package_to_fields() {
     local package="$1"
     if [[ "${package}" =~ ^postgrespro-ent-([0-9]+)-server$ ]]; then
         printf 'postgrespro-ent|%s\n' "${BASH_REMATCH[1]}"
-    elif [[ "${package}" =~ ^postgresql-([0-9]+)-server$ ]]; then
+    elif [[ "${package}" =~ ^postgresql-([0-9]+)(-server)?$ ]]; then
         printf 'postgresql|%s\n' "${BASH_REMATCH[1]}"
     elif [[ "${package}" =~ ^tantor-free-server-([0-9]+)(-server)?$ ]]; then
         printf 'tantor-free|%s\n' "${BASH_REMATCH[1]}"
@@ -609,7 +640,7 @@ package_to_fields() {
 
 server_packages() {
     apt-cache pkgnames 2>/dev/null |
-        grep -E '^(postgrespro-ent-[0-9]+-server|postgresql-[0-9]+-server|tantor-free-server-[0-9]+(-server)?|tantor-(se|be)-server-[0-9]+)$' |
+        grep -E '^(postgrespro-ent-[0-9]+-server|postgresql-[0-9]+(-server)?|tantor-free-server-[0-9]+(-server)?|tantor-(se|be)-server-[0-9]+)$' |
         sort -u
 }
 
@@ -620,12 +651,12 @@ installed_server_packages() {
     done < <(
         dpkg-query -W -f='${binary:Package}\t${db:Status-Abbrev}\n' 2>/dev/null |
             awk '$2 == "ii" {sub(/:.*/, "", $1); print $1}' |
-            grep -E '^(postgrespro-ent-[0-9]+-server|postgresql-[0-9]+-server|tantor-free-server-[0-9]+(-server)?|tantor-(se|be)-server-[0-9]+)$' |
+            grep -E '^(postgrespro-ent-[0-9]+-server|postgresql-[0-9]+(-server)?|tantor-free-server-[0-9]+(-server)?|tantor-(se|be)-server-[0-9]+)$' |
             sort -u || true
     )
 }
 
-# Pro editions precede vanilla/Free; SE precedes BE even at a lower major.
+# SE/Enterprise precede BE, then the shared Tantor Free / PostgreSQL tier.
 # PostgresPro Enterprise shares the top tier with SE; explicit choices win.
 server_family_priority() {
     case "$1" in
@@ -764,7 +795,7 @@ select_or_install_server() {
             [[ "${pg_ver}" =~ ^[0-9]+$ ]] || die "недопустимая версия PostgreSQL: ${pg_ver}"
             case "${pg}" in
                 postgrespro-ent) package="postgrespro-ent-${pg_ver}-server" ;;
-                postgresql) package="postgresql-${pg_ver}-server" ;;
+                postgresql) package="$(vanilla_server_package "${pg_ver}")" ;;
                 tantor-se|tantor-be) package="${pg}-server-${pg_ver}" ;;
                 tantor-free)
                     package="tantor-free-server-${pg_ver}-server"
@@ -2140,9 +2171,9 @@ write_common_backup_metadata() {
 
 cluster_server_package() {
     local version="$1" home="$2" data="$3" package owner fields
+    local -a owners=()
     if [[ "${home}" == /opt/tantor/* ]]; then
         # Editions share BINDIR. Identify its actual owner, never the preferred edition.
-        local -a owners=()
         while IFS= read -r owner; do
             package="${owner%%: /*}"
             package="${package%%:*}"
@@ -2159,7 +2190,20 @@ cluster_server_package() {
     elif [[ "${home}" == /opt/pgpro/* ]]; then
         package="postgrespro-ent-${version}-server"
     else
-        package="postgresql-${version}-server"
+        # Record the installed binary owner, never an invented -server package.
+        while IFS= read -r owner; do
+            package="${owner%%: /*}"
+            package="${package%%:*}"
+            fields="$(package_to_fields "${package}")" || continue
+            [[ "${fields}" == "postgresql|${version}" ]] || continue
+            package_installed "${package}" || continue
+            owners+=("${package}")
+        done < <(dpkg-query -S "${home}/bin/postgres" 2>/dev/null | sort -u || true)
+        if ((${#owners[@]} != 1)); then
+            warn "не удалось однозначно определить пакет-владелец ${home}/bin/postgres"
+            return 1
+        fi
+        package="${owners[0]}"
     fi
     printf '%s' "${package}"
 }
@@ -3503,6 +3547,119 @@ info_menu() {
     done
 }
 
+select_sql_file() {
+    local file choice resolved i
+    local -a files=()
+    SELECTED_SQL_FILE=""
+    if [[ -d "${backup_dir}" ]]; then
+        while IFS= read -r -d '' file; do
+            [[ -r "${file}" ]] && files+=("${file}")
+        done < <(find -L "${backup_dir}" -maxdepth 1 -type f -name '*.sql' -print0 2>/dev/null | sort -z)
+    fi
+    printf 'SQL-файлы в %s:\n' "${backup_dir}"
+    for i in "${!files[@]}"; do
+        printf '%3d - %s\n' "$((i + 1))" "${files[i]##*/}"
+    done
+    printf '  0 - Вернуться назад\nМожно ввести относительный или полный путь к .sql, также при пустом списке.\n'
+    read -r -p 'Выберите номер SQL-файла или введите путь: ' choice || return 2
+    [[ -n "${choice}" && "${choice}" != 0 ]] || return 1
+    file=""
+    if [[ "${choice}" =~ ^[0-9]+$ ]]; then
+        for i in "${!files[@]}"; do
+            [[ "${choice}" != "$((i + 1))" ]] || file="${files[i]}"
+        done
+    elif [[ "${choice}" == /* || -f "${choice}" ]]; then
+        file="${choice}"
+    else
+        file="${backup_dir%/}/${choice}"
+    fi
+    if [[ "${file}" == *.sql ]] && resolved="$(realpath -e -- "${file}" 2>/dev/null)" &&
+        [[ -f "${resolved}" && -r "${resolved}" && "${resolved}" == *.sql ]]; then
+        SELECTED_SQL_FILE="${resolved}"
+        return 0
+    fi
+    warn 'требуется доступный для чтения обычный файл .sql'
+    pause
+    return 1
+}
+
+execute_sql_checked() {
+    local version="$1" name="$2" port="$3" data="$4" database="$5" file="$6"
+    local listing row home socket_dir
+    # Recheck the confirmed target; never silently switch to another port/data-dir.
+    listing="$(pg_lsclusters --no-header)" || { warn 'не удалось перепроверить кластер'; return 1; }
+    row="$(printf '%s\n' "${listing}" | awk -v v="${version}" -v n="${name}" '$1==v && $2==n {print}')"
+    local current_version current_name current_port current_status current_owner current_data current_log
+    read -r current_version current_name current_port current_status current_owner current_data current_log <<<"${row}"
+    [[ "${current_port}" == "${port}" && "${current_data}" == "${data}" && "${current_status}" == online* ]] || {
+        warn 'кластер остановлен или его параметры изменились; выберите цель заново'; return 1;
+    }
+    [[ -f "${file}" && -r "${file}" && ! -L "${file}" ]] || { warn 'SQL-файл больше недоступен'; return 1; }
+    home="$(cluster_pg_home "${version}" "${data}")" || return 1
+    socket_dir="$(cluster_socket_directory "${port}")" || { warn 'Unix-сокет кластера не найден'; return 1; }
+    database_exists "${home}" "${socket_dir}" "${port}" "${database}" || {
+        warn 'база данных больше недоступна'; return 1;
+    }
+    # Root opens the selected file; only the postgres child interprets trusted SQL.
+    runuser -u postgres -- "${home}/bin/psql" -X --no-password \
+        -h "${socket_dir}" -p "${port}" -d "${database}" \
+        --set=ON_ERROR_STOP=1 --file=- <"${file}"
+}
+
+execute_sql_menu() {
+    local page=cluster result row version name port status owner data log home socket_dir database file answer
+    while true; do
+        header
+        step 'Кластер: Выполнить SQL'
+        case "${page}" in
+            cluster)
+                select_cluster 'Выберите кластер' name-or-number || return 0
+                row="${SELECTED_CLUSTER_ROW}"
+                read -r version name port status owner data log <<<"${row}"
+                [[ "${status}" == online* ]] || { warn 'кластер должен быть запущен'; pause; continue; }
+                home="$(cluster_pg_home "${version}" "${data}")" || { warn 'не найден сервер кластера'; pause; continue; }
+                socket_dir="$(cluster_socket_directory "${port}")" || { warn 'Unix-сокет кластера не найден'; pause; continue; }
+                page=database
+                ;;
+            database)
+                print_cluster_databases "${home}" "${socket_dir}" "${port}" "${version}" "${name}" || {
+                    warn 'не удалось получить список БД'; pause; page=cluster; continue;
+                }
+                select_existing_database 'Выберите БД (номер или точное имя; 0 — назад)' 0 || {
+                    page=cluster; continue;
+                }
+                database="${SELECTED_DATABASE}"
+                page=file
+                ;;
+            file)
+                printf 'Цель: %s/%s/%s\n' "${version}" "${name}" "${database}"
+                if select_sql_file; then
+                    file="${SELECTED_SQL_FILE}"
+                    page=confirm
+                else
+                    result=$?
+                    ((result != 2)) || return 0
+                    page=database
+                fi
+                ;;
+            confirm)
+                printf 'Файл: %s\nИспользуйте только доверенный SQL. Он выполняется от postgres; ошибка может оставить частичные изменения.\n0 - Вернуться назад\n' "${file}"
+                read -r -p "${version}/${name}/${database}: выполнить сценарий ${file##*/} ? [N/y] : " answer || return 0
+                if [[ "${answer}" == 0 ]]; then page=file; continue; fi
+                [[ "${answer}" =~ ^[Yy]$ ]] || { printf 'Выполнение SQL отменено.\n'; return 0; }
+                if execute_sql_checked "${version}" "${name}" "${port}" "${data}" "${database}" "${file}"; then
+                    printf 'SQL-сценарий успешно выполнен: %s/%s/%s.\n' "${version}" "${name}" "${database}"
+                else
+                    result=$?
+                    printf 'ОШИБКА: SQL-сценарий не выполнен успешно (код %s); возможны частичные изменения.\n' "${result}" >&2
+                fi
+                pause
+                return 0
+                ;;
+        esac
+    done
+}
+
 change_cluster_menu() {
     local choice
     while true; do
@@ -3512,12 +3669,14 @@ change_cluster_menu() {
             '0 - Вернуться назад' \
             '1 - Кластер: Переименовать' \
             '2 - Кластер: Переключить порт' \
-            '3 - Кластер: Переместить данные'
+            '3 - Кластер: Переместить данные' \
+            '4 - Кластер: Выполнить SQL'
         read -r -p "Выбор: " choice || return 0
         case "${choice}" in
             1) rename_cluster_menu ;;
             2) change_port_menu ;;
             3) move_cluster_data_menu ;;
+            4) execute_sql_menu ;;
             *) return 0 ;;
         esac
     done

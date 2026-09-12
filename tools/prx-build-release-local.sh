@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # Purpose: stage a release on Linux FS to avoid DrvFS package ownership/mode issues.
-# Usage: bash tools/prx-build-release-local.sh REPO VERSION JOURNAL_VERSION [BASELINE_VERSION]
+# Usage: bash tools/prx-build-release-local.sh REPO VERSION JOURNAL_VERSION [BASELINE_VERSION [CONFIG_FILE]]
 # Args: REPO -- source directory; VERSION -- release; JOURNAL_VERSION -- evidence version.
 #   BASELINE_VERSION -- optional local DEB whose shell logic must remain unchanged.
+#   CONFIG_FILE -- optional distribution config; defaults to REPO/.new-claster.config.
 # Output: verified gzip-only DEB in REPO/dist; no package installation.
 # Example: bash tools/prx-build-release-local.sh /mnt/d/Ai/pg_claster_creator 2.2.0 2.1.2
 set -Eeuo pipefail
 repo="$1"; version="$2"; journal_version="$3"
 baseline_version="${4:-}"
+config_source="${5:-$repo/.new-claster.config}"
 stage="$(mktemp -d /tmp/pgcc-release.XXXXXX)"
 trap 'rm -rf -- "$stage"' EXIT
-for f in create-claster.sh create-claster-backup.sh create-claster-deb.sh .new-claster.config README.md TEST.md CHANGELOG.md "TEST-$journal_version-journal-passed.md"; do
+for f in create-claster.sh create-claster-backup.sh create-claster-deb.sh README.md TEST.md CHANGELOG.md "TEST-$journal_version-journal-passed.md"; do
     cp -- "$repo/$f" "$stage/$f"
 done
+cp -- "$config_source" "$stage/.new-claster.config"
 cp -R -- "$repo/man" "$stage/man"
 if [[ -n "$baseline_version" ]]; then
     dpkg-deb -x "$repo/dist/claster-creator-$baseline_version.deb" "$stage/baseline"
@@ -43,14 +46,14 @@ cmp "$stage/extracted-journal" "$repo/TEST-$journal_version-journal-passed.md"
 tar -tvf "$stage/payload.tar" "$member" | tee "$stage/entry"
 grep -q '^-rw-r--r-- root/root ' "$stage/entry"
 tar -xOf "$stage/payload.tar" ./usr/local/share/pg_claster_creator/.new-claster.config > "$stage/extracted-config"
-cmp "$stage/extracted-config" "$repo/.new-claster.config"
+cmp "$stage/extracted-config" "$config_source"
 for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh README.md TEST.md CHANGELOG.md; do
     tar -xOf "$stage/payload.tar" "./usr/local/share/pg_claster_creator/$name" > "$stage/extracted-file"
     cmp "$stage/extracted-file" "$repo/$name"
 done
 sed '/^main "\$@"$/d' "$stage/create-claster-deb.sh" > "$stage/check-builder.sh"
 mv "$stage/TEST-$journal_version-journal-passed.md" "$stage/journal-hidden"
-for mode in 1 2 3 4; do
+for mode in 1 2 3 4 5; do
     if (source "$stage/check-builder.sh"; MODE="$mode"; build_package) > "$stage/error" 2>&1; then exit 1; fi
     grep -q 'не найден журнал успешного тестирования' "$stage/error"
 done

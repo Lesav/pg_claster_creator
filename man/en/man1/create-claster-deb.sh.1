@@ -1,10 +1,15 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-12" "pg_claster_creator 2.4.3" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-12" "pg_claster_creator 2.5.1" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
 .B create-claster-deb.sh
 .RI [ options ]
 .SH DESCRIPTION
+For vanilla PostgreSQL, use --pg-family postgresql and --pg-version N.
+The default server dependency is postgresql-N; installed/available legacy
+postgresql-N-server layouts are preserved. On Mint the server itself provides
+version-matched contrib; no unversioned postgresql-contrib metapackage is added.
+.PP
 .B create-claster-deb.sh
 builds installable Debian packages from the project source tree. It creates a
 fresh filesystem skeleton below
@@ -19,7 +24,7 @@ unless another output directory is selected.
 Both control and data archives use gzip explicitly, including fakeroot builds,
 so packages remain readable by older Astra Linux 1.6/1.7 dpkg versions.
 .PP
-With no arguments, an interactive mode menu is shown. Modes 2 through 4 are
+With no arguments, an interactive mode menu is shown. Modes 2 through 5 are
 interactive by default; use
 .B --non-interactive
 for automation. Every package depends on
@@ -48,8 +53,23 @@ Install the files and restore a cluster from an embedded cold backup.
 .TP
 .B 4
 Install the files, create a cluster, and restore an embedded hot database dump.
+.TP
+.B 5
+Install the files, create a cluster/database, and execute an embedded SQL file.
+Select a numbered .sql file from the backup directory or enter a relative or
+absolute path, even if the list is empty. Relative paths are resolved from the
+working directory first, then from the backup directory. Modes 3 and 4 list
+only cold archives and hot dumps respectively.
 .PP
-For modes 2 through 4, postinst first checks the exact cluster version and name.
+Use --sql-file and --database for non-interactive mode 5. The SQL payload has
+mode 0600 and is read by psql as postgres with -X, --no-password and ON_ERROR_STOP.
+Use trusted self-contained SQL only; included files are not bundled. Errors may
+leave partial changes. An interrupted SQL run is not replayed automatically;
+CLASTER_FORCE_INSTALL=1 recreates the entire target cluster without a backup.
+CLASTER_FORCE_DB_INSTALL is rejected for mode 5. Successful reconfiguration
+does not repeat SQL. The filename ends in -DATABASE-sql.deb.
+.PP
+For modes 2 through 5, postinst first checks the exact cluster version and name.
 If an unrelated cluster is already registered, postinst prints a warning, skips
 the remaining deployment actions, and exits with status 0. Completion markers
 are honored only while the target cluster is registered. If it was removed,
@@ -58,13 +78,13 @@ An interrupted plan with a registered cluster and an intermediate marker resumes
 the pending restore or data-movement step. A final marker is never created until
 the target cluster has been verified.
 .PP
-When an occupied requested port is replaced during mode 2 or mode 4 cluster
+When an occupied requested port is replaced during mode 2, 4 or 5 cluster
 creation, postinst repeats the warning after all actions, including hot restore.
 The final notice shows the actual port and a
 .B create-claster.sh --action port
 command for changing it later.
 .SH POSTGRES PRO VERSION SELECTION
-In mode 4 with
+In modes 4 and 5 with
 .B postgrespro-ent
 and no explicit
 .BR --package ,
@@ -105,13 +125,13 @@ Print complete usage information and exit.
 Print the builder version and exit.
 .TP
 .BI "-m, --mode " MODE
-Select mode 1, 2, 3, or 4.
+Select mode 1, 2, 3, 4, or 5.
 .TP
 .BI "--pg-family " FAMILY
 Select postgresql, postgrespro-ent, tantor-free, tantor-se (Special Edition), or tantor-be (Basic Edition).
 .TP
 .BI "--pg-version " VERSION
-Set the PostgreSQL major version. For automatic PostgreSQL Pro mode 4 packages,
+Set the PostgreSQL major version. For automatic PostgreSQL Pro mode 4/5 packages,
 this is the minimum target version.
 .TP
 .BI "--cluster-name " NAME
@@ -140,15 +160,18 @@ it does not exist.
 .BI "--backup-file " FILE
 Select a cold backup for mode 3 or a hot backup for mode 4.
 .TP
+.BI "--sql-file " FILE
+Embed a readable .sql file for mode 5; the database must not be a system database.
+.TP
 .BI "--backup-dir " DIRECTORY
 Select the directory used by interactive backup selection.
 .TP
 .BI "--database " NAME
-Set the target database for mode 4.
+Set the target database for modes 4 and 5.
 .TP
 .BI "--depends " PACKAGES
 Add comma-separated Debian package dependencies. The option may be repeated and
-is accepted only in modes 2 through 4. With automatic PostgreSQL Pro selection,
+is accepted only in modes 2 through 5. With automatic PostgreSQL Pro selection,
 server packages already covered by eligible contrib alternatives are omitted.
 .TP
 .BI "--output-dir " DIRECTORY
@@ -156,7 +179,7 @@ Select the package destination. The default is
 .IR dist .
 .TP
 .BR -i , " --interactive"
-Explicitly enable the mode 2 through 4 configuration dialog.
+Explicitly enable the mode 2 through 5 configuration dialog.
 .TP
 .BR -n , " --non-interactive"
 Disable prompts and require complete arguments.
@@ -180,12 +203,17 @@ does not preserve POSIX permissions.
 Running it repeats the last interactive build without prompts. A builder run
 with
 .B --non-interactive
-does not create or change this file. Mode 2 and mode 4 commands contain the
+does not create or change this file. Mode 2, mode 4 and mode 5 commands contain the
 configured database password, so access to the home directory must be restricted.
 .SH PACKAGE INSTALLATION ENVIRONMENT
+Build inputs use CLI options and configuration, not PGCC_* variables.
+SQL_FILE and PGCC_SQL_FILE are not environment inputs; use --sql-file FILE
+or --sql-file=FILE in mode 5. The flags below apply to package installation,
+not to the builder.
+.PP
 .TP
 .B CLASTER_FORCE_INSTALL=1
-For modes 2 through 4, ignore previous completion markers, remove an existing
+For modes 2 through 5, ignore previous completion markers, remove an existing
 target cluster without creating a backup, verify its removal, and execute the
 complete package plan again. This is the force option used for a mode 3 cold
 restore.

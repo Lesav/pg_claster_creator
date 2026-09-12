@@ -36,7 +36,7 @@ grep -q '^-rw-r--r-- root/root ' "$work/entry"
 printf 'PASS journal: expected path, identical bytes, root/root 0644\n'
 # Load the unchanged build function from a directory without a journal.
 sed '/^main "\$@"$/d' "$builder" > "$work/builder.sh"
-for mode in 1 2 3 4; do
+for mode in 1 2 3 4 5; do
     if (source "$work/builder.sh"; MODE="$mode"; build_package) >"$work/error" 2>&1; then
         echo 'FAIL missing journal accepted'; exit 1
     fi

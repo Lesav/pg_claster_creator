@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-12" "pg_claster_creator 2.4.3" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-12" "pg_claster_creator 2.5.1" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -11,6 +11,11 @@ create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .RI [ options ]
 .RI [ version " " cluster ]
 .SH DESCRIPTION
+Vanilla Debian/Ubuntu/Mint servers use postgresql-N (legacy postgresql-N-server
+is also accepted). Package priority is SE/Enterprise, BE, then the shared
+Tantor Free / vanilla PostgreSQL tier. Newer major versions come first within a tier.
+An explicit package choice wins. Backup metadata records the installed binary owner.
+.PP
 .B create-claster.sh
 is an interactive and non-interactive administration utility for PostgreSQL,
 Postgres Pro Enterprise, and Tantor Free/SE/BE on APT-based Linux systems.
@@ -40,7 +45,14 @@ are skipped. State is checked before and after confirmation and after execution.
 Boot enablement is unchanged.
 .PP
 Interactive menu item 4 opens Edit: 1 rename, 2 change port, 3 move data,
-0 back. Backup, restore and delete are main-menu items 5, 6 and 7.
+4 execute SQL, 0 back. Backup, restore and delete are main-menu items 5, 6 and 7.
+.PP
+Edit item 4 selects an online cluster, an existing database and a numbered .sql
+file from the backup directory, or a relative/absolute path. 0 returns to the
+previous step. Only y/Y confirms; Enter cancels. The target is rechecked before
+psql runs as postgres with -X, --no-password and ON_ERROR_STOP. Output remains
+visible until Enter. Use trusted self-contained SQL; errors may leave partial
+changes. SHOW server_version; is a harmless test. No SQL CLI action is added.
 .PP
 Edit item 1 renames a cluster using pg_renamecluster after validating
 the new name across all major versions and stopping the source cluster.
@@ -200,6 +212,9 @@ catalog are validated first. Active sessions are then terminated by
 the complete database is recreated with its previous owner, and pg_restore runs
 without object-by-object cleanup. This avoids failures on inherited constraints.
 .SH ENVIRONMENT
+SQL execution is interactive only. There is no --action sql, --sql-file or
+PGCC_SQL_FILE input. Use the Edit menu to select a trusted SQL file.
+.PP
 Command-line options override the corresponding variables:
 .BR PGCC_ACTION ,
 .BR PGCC_PACKAGE ,
