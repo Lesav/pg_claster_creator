@@ -27,7 +27,7 @@
 #   All modes require the explicitly selected validation journal beside the builder
 #   and install it into the same share directory with mode 0644. Missing release
 #   evidence aborts the build. The 2.1.2 journal is historical; it does not
-#   validate the new 2.4.0 features. See TEST.md for the current test scope.
+#   validate the new 2.4.2 features. See TEST.md for the current test scope.
 #
 # Package modes accepted by --mode:
 #   1  Install scripts, configuration, documentation, and the command symlink.
@@ -90,7 +90,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.4.0"
+readonly SCRIPT_VERSION="2.4.2"
 # Bump this only when a new functional validation journal is available.
 readonly TEST_JOURNAL_VERSION="2.1.2"
 readonly TEST_JOURNAL_NAME="TEST-${TEST_JOURNAL_VERSION}-journal-passed.md"

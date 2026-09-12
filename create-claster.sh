@@ -32,8 +32,11 @@
 #   Interactive menu item 3 selects a cluster, then offers the opposite of its
 #   current state with explicit y/N confirmation; no separate action selection.
 #   Interactive menu item 4 opens the Edit submenu: rename, port, data location.
-#   Renaming uses pg_renamecluster,
-#   preserving its online/offline state and updating project-specific units.
+#   Renaming uses pg_renamecluster with child-scoped PG_CLUSTER_CONF_ROOT,
+#   preserves state/autostart and rewrites complete paths only once. Effective
+#   data/HBA/ident paths are checked before start; standard log links are updated.
+#   No enable/disable is used; one bounded daemon-reload follows unit updates.
+#   Partial failure reports a recovery manifest, without an automatic rollback.
 #   Database/role names and external cron jobs are not renamed.
 #
 # Command-line options:
@@ -81,7 +84,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.4.0"
+readonly SCRIPT_VERSION="2.4.2"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -177,6 +180,8 @@ usage() {
 Интерактивный пункт 4 — Изменить: переименование, переключение порта, перенос данных.
 Переименовать: проверка нового имени, остановка,
 переименование регистрации/путей и служб; исходное состояние запуска сохраняется.
+До запуска проверяются пути data/HBA/ident; автозапуск переносится без enable/disable.
+При ошибке выводятся этап и /var/tmp/pgcc-rename.*/rename-state.env; автоотката нет.
 Имена БД/ролей и задания cron не переименовываются.
 Удаление кластера: подтверждённая остановка, удаление его данных, конфигурации
 и службы без pg_dropcluster. Внешние цели ссылок WAL/tablespace сохраняются.
@@ -1218,7 +1223,7 @@ restore_target_conflict() {
         return 0
     fi
     if [[ "${policy}" == rename ]]; then
-        unit_state="$(systemctl show "${service}" -p ActiveState -p MainPID 2>/dev/null)" || {
+        unit_state="$(timeout -k 5s 15s systemctl show "${service}" -p ActiveState -p MainPID 2>/dev/null)" || {
             printf 'не удалось проверить состояние службы %s' "${service}"; return 0;
         }
         if ! grep -Eq '^ActiveState=(inactive|failed)$' <<<"${unit_state}" || ! grep -qx 'MainPID=0' <<<"${unit_state}"; then
@@ -1609,10 +1614,42 @@ renamed_cluster_path() {
     perl -e 'my ($s,$old,$new)=@ARGV; $s =~ s/\b\Q$old\E\b/$new/g; print $s' -- "$1" "$2" "$3"
 }
 
-rename_cluster_checked() {
+# Rewrite only complete old paths/identifiers, in a single pass. pg_renamecluster
+# may already have updated a file; old -> old_new must not become old_new_new.
+# Keep the generic literal replacement used by restore/move-data unchanged.
+rewrite_renamed_cluster_file() {
+    local file="$1" old_conf="$2" new_conf="$3" old_data="$4" new_data="$5" old_id="$6" new_id="$7"
+    [[ -f "${file}" && ! -L "${file}" ]] || return 0
+    OLD_CONF="${old_conf}" NEW_CONF="${new_conf}" OLD_DATA="${old_data}" NEW_DATA="${new_data}" \
+        OLD_ID="${old_id}" NEW_ID="${new_id}" perl -pi -e '
+        BEGIN { %to = ($ENV{OLD_CONF} => $ENV{NEW_CONF}, $ENV{OLD_DATA} => $ENV{NEW_DATA}, $ENV{OLD_ID} => $ENV{NEW_ID}); }
+        s{(\Q$ENV{OLD_CONF}\E(?=/|[\s\x27\x22]|$)|\Q$ENV{OLD_DATA}\E(?=/|[\s\x27\x22]|$)|(?<![A-Za-z0-9_])\Q$ENV{OLD_ID}\E(?![A-Za-z0-9_-]))}{$to{$1}}ge;
+        ' -- "${file}"
+}
+
+# Parse the effective configuration (including auto.conf/includes) without
+# starting PostgreSQL. Do not mistake a plausible registry row for a usable DB.
+validate_renamed_cluster_config() {
+    local version="$1" name="$2" data="$3" home="$4" owner="$5" setting value
+    for setting in data_directory hba_file ident_file; do
+        value="$(run_parsec_aware timeout -k 5s 15s runuser -u "${owner}" -- "${home}/bin/postgres" \
+            -D "${data}" -c "config_file=/etc/postgresql/${version}/${name}/postgresql.conf" -C "${setting}")" || return 1
+        if [[ "${setting}" == data_directory ]]; then
+            [[ "$(realpath -m -- "${value}")" == "$(realpath -m -- "${data}")" ]] || return 1
+        else
+            [[ "${value}" == /* && -f "${value}" ]] || return 1
+            runuser -u "${owner}" -- test -r "${value}" || return 1
+        fi
+    done
+}
+
+# Use a subshell so recovery diagnostics cannot replace the caller's EXIT trap.
+rename_cluster_checked() (
     local version="$1" name="$2" new_name="$3" data="$4" status="$5"
     local new_data conflict service old_unit new_unit conf new_conf candidate recovery rows reported
-    local old_log new_log file was_online=no was_enabled=no stats new_stats backup_index=0
+    local old_log new_log file was_online=no stats new_stats backup_index=0 home owner status_rc=0 phase=preflight
+    local old_service="postgresql@${version}-${name}.service" new_service="postgresql@${version}-${new_name}.service" link
+    local -a enabled_links=()
     validate_identifier "${new_name}" && ((${#new_name} <= 63)) || die "недопустимое новое имя кластера"
     [[ "${name}" != "${new_name}" ]] || die "новое имя совпадает с текущим"
     command -v pg_renamecluster >/dev/null || die "не найдена команда pg_renamecluster"
@@ -1629,6 +1666,10 @@ rename_cluster_checked() {
     conf="/etc/postgresql/${version}/${name}"
     new_conf="/etc/postgresql/${version}/${new_name}"
     [[ -d "${conf}" && ! -L "${conf}" ]] || die "небезопасный каталог конфигурации ${conf}"
+    [[ -f "${data}/PG_VERSION" ]] || die "в каталоге данных отсутствует PG_VERSION"
+    home="$(cluster_pg_home "${version}" "${data}")"
+    owner="$(stat -c '%U' "${data}")"
+    [[ -x "${home}/bin/pg_ctl" && -x "${home}/bin/postgres" ]] || die "не найдены серверные утилиты кластера"
     stats="$(pg_conftool "${version}" "${name}" show stats_temp_directory 2>/dev/null | sed -n "s/^stats_temp_directory = '//; s/'$//p" || true)"
     if [[ -n "${stats}" && -d "${stats}" ]]; then
         new_stats="$(renamed_cluster_path "${stats}" "${name}" "${new_name}")"
@@ -1644,7 +1685,19 @@ rename_cluster_checked() {
         [[ ! -e "${new_log}" && ! -L "${new_log}" ]] || die "целевой лог уже существует: ${new_log}"
     done
     recovery="$(mktemp -d /var/tmp/pgcc-rename.XXXXXX)" || die "не удалось создать каталог страховочной копии"
+    trap 'rename_rc=$?; if ((rename_rc != 0)); then printf "phase=%q\nexit_code=%q\n" "$phase" "$rename_rc" >>"$recovery/rename-state.env"; printf "ОШИБКА: переименование не завершено, этап=%s, код=%s. Состояние и пути: %s/rename-state.env; страховочная копия: %s. Автоматический откат не выполнялся; перед повтором проверьте реестр, каталоги и службы.\n" "$phase" "$rename_rc" "$recovery" "$recovery" >&2; fi' EXIT
+    {
+        printf 'version=%q\nold_name=%q\nnew_name=%q\nold_data=%q\nnew_data=%q\nold_conf=%q\nnew_conf=%q\n' \
+            "${version}" "${name}" "${new_name}" "${data}" "${new_data}" "${conf}" "${new_conf}"
+    } >"${recovery}/rename-state.env"
     cp -a -- "${conf}" "${recovery}/config" || die "не удалось сохранить конфигурацию"
+    for candidate in "/etc/systemd/system/${old_service}.d" "/etc/syslog-ng/conf.d/mod-astra-postgres-${version}-${name}.conf"; do
+        if [[ -e "${candidate}" || -L "${candidate}" ]]; then
+            cp -a -- "${candidate}" "${recovery}/vendor-${backup_index}" || die "не удалось сохранить ${candidate}"
+            printf '%s\t%s\n' "vendor-${backup_index}" "${candidate}" >>"${recovery}/unit-paths.txt"
+            ((backup_index += 1))
+        fi
+    done
     old_unit="$(cluster_service_file "${version}" "${name}" || true)"
     [[ -z "${old_unit}" ]] || cp -- "${old_unit}" "${recovery}/unit.service" || die "не удалось сохранить unit"
     for candidate in "/etc/systemd/system/postgresql@${version}-${name}.service" "/usr/lib/systemd/system/postgresql@${version}-${name}.service" "/lib/systemd/system/postgresql@${version}-${name}.service" "/.postgres/systemd/save/postgresql@${version}-${name}.service"; do
@@ -1654,7 +1707,24 @@ rename_cluster_checked() {
             ((backup_index += 1))
         fi
     done
-    systemctl is-enabled --quiet "postgresql@${version}-${name}.service" 2>/dev/null && was_enabled=yes
+    # Preserve exact persistent/runtime Wants/Requires links without enable or
+    # disable, which can crash systemd on Astra WSL/PARSEC for instance units.
+    for candidate in /etc/systemd/system/*.wants/"${old_service}" /etc/systemd/system/*.requires/"${old_service}" \
+        /run/systemd/system/*.wants/"${old_service}" /run/systemd/system/*.requires/"${old_service}"; do
+        [[ -e "${candidate}" || -L "${candidate}" ]] || continue
+        [[ -L "${candidate}" ]] || die "ссылка автозапуска не является симлинком: ${candidate}"
+        enabled_links+=("${candidate}")
+        cp -a -- "${candidate}" "${recovery}/autostart-${backup_index}"
+        printf '%s\t%s\n' "autostart-${backup_index}" "${candidate}" >>"${recovery}/unit-paths.txt"
+        ((backup_index += 1))
+        link="${candidate%/*}/${new_service}"
+        if [[ -e "${link}" || -L "${link}" ]]; then
+            [[ -L "${link}" ]] || die "занят целевой файл автозапуска: ${link}"
+            cp -a -- "${link}" "${recovery}/target-autostart-${backup_index}"
+            printf '%s\t%s\n' "target-autostart-${backup_index}" "${link}" >>"${recovery}/unit-paths.txt"
+            ((backup_index += 1))
+        fi
+    done
     # Preserve target-name residue as well; it will be replaced, not reused.
     for candidate in "/etc/systemd/system/postgresql@${version}-${new_name}.service" "/usr/lib/systemd/system/postgresql@${version}-${new_name}.service" "/lib/systemd/system/postgresql@${version}-${new_name}.service" "/etc/systemd/system/multi-user.target.wants/postgresql@${version}-${new_name}.service" "/.postgres/systemd/postgresql@${version}-${new_name}.service" "/.postgres/systemd/save/postgresql@${version}-${new_name}.service"; do
         if [[ -e "${candidate}" || -L "${candidate}" ]]; then
@@ -1668,49 +1738,75 @@ rename_cluster_checked() {
     candidate="${new_data}"
     [[ "${new_data}" != "${data}" ]] || candidate="${new_conf}"
     conflict="$(restore_target_conflict "${version}" "${new_name}" "${candidate}" rename)" && die "${conflict}"
-    remove_cluster_service_files "${version}" "${new_name}"
-    [[ "${status}" != online* ]] || was_online=yes
-    if [[ "${was_online}" == yes ]]; then stop_cluster_checked "${version}" "${name}"; fi
-    if ! run_parsec_aware pg_renamecluster "${version}" "${name}" "${new_name}"; then
+    phase=stop
+    status="$(cluster_power_state "${version}" "${name}")" || die "не удалось повторно проверить исходный кластер"
+    [[ "${status}" != online ]] || was_online=yes
+    printf 'was_online=%q\n' "${was_online}" >>"${recovery}/rename-state.env"
+    stop_cluster_checked "${version}" "${name}"
+    run_parsec_aware timeout -k 5s 15s runuser -u "${owner}" -- "${home}/bin/pg_ctl" -D "${data}" status || status_rc=$?
+    [[ "${status_rc}" == 3 ]] || die "не подтверждён останов кластера (pg_ctl status=${status_rc}); переименование отменено"
+    phase=rename
+    # Explicit confroot is scoped to this child only. It suppresses the native
+    # helper's systemd reload; this function reloads once after validating paths.
+    if ! PG_CLUSTER_CONF_ROOT=/etc/postgresql run_parsec_aware timeout -k 5s 60s pg_renamecluster "${version}" "${name}" "${new_name}"; then
         die "pg_renamecluster завершился ошибкой; возможны частичные изменения. Кластер не запускается автоматически. Копия: ${recovery}"
     fi
     [[ -d "${new_conf}" && -d "${new_data}" ]] || die "после переименования нет ожидаемых каталогов; копия: ${recovery}"
+    phase=configuration
+    # Native helpers move standard log files but can leave conf/log pointing
+    # at the old name; the next start would recreate that old log. Preserve
+    # custom external log destinations and update only the exact standard link.
+    if [[ -L "${new_conf}/log" && "$(readlink -- "${new_conf}/log")" == "/var/log/postgresql/postgresql-${version}-${name}.log" ]]; then
+        ln -sfn -- "/var/log/postgresql/postgresql-${version}-${new_name}.log" "${new_conf}/log" || die "не удалось обновить ссылку журнала"
+    fi
     while IFS= read -r -d '' file; do
-        replace_literal_in_file "${conf}" "${new_conf}" "${file}"
-        replace_literal_in_file "${data}" "${new_data}" "${file}"
-        replace_literal_in_file "${version}-${name}" "${version}-${new_name}" "${file}"
+        rewrite_renamed_cluster_file "${file}" "${conf}" "${new_conf}" "${data}" "${new_data}" "${version}-${name}" "${version}-${new_name}"
     done < <(find "${new_conf}" -type f -print0)
     for file in "${new_data}/postgresql.auto.conf" "${new_data}/postmaster.opts"; do
-        replace_literal_in_file "${conf}" "${new_conf}" "${file}"
-        replace_literal_in_file "${data}" "${new_data}" "${file}"
-        replace_literal_in_file "${version}-${name}" "${version}-${new_name}" "${file}"
+        rewrite_renamed_cluster_file "${file}" "${conf}" "${new_conf}" "${data}" "${new_data}" "${version}-${name}" "${version}-${new_name}"
     done
     mkdir -p "${new_conf}/conf.d"
+    if [[ -d "/etc/systemd/system/${new_service}.d" && ! -L "/etc/systemd/system/${new_service}.d" ]]; then
+        while IFS= read -r -d '' file; do
+            rewrite_renamed_cluster_file "${file}" "${conf}" "${new_conf}" "${data}" "${new_data}" "${version}-${name}" "${version}-${new_name}"
+        done < <(find "/etc/systemd/system/${new_service}.d" -type f -print0)
+    fi
     printf "cluster_name = '%s/%s'\n" "${version}" "${new_name}" >"${new_conf}/conf.d/cluster_name.conf"
     set_postgresql_setting "${new_data}/postgresql.auto.conf" cluster_name "'${version}/${new_name}'"
+    pg_conftool "${version}" "${new_name}" set data_directory "${new_data}" || die "не удалось записать каталог данных"
+    validate_renamed_cluster_config "${version}" "${new_name}" "${new_data}" "${home}" "${owner}" || die "неверные эффективные пути data/HBA/ident после переименования; кластер не запускается"
     rows="$(pg_lsclusters --no-header)" || die "не удалось проверить переименованный кластер; копия: ${recovery}"
     reported="$(awk -v v="${version}" -v n="${new_name}" '$1==v && $2==n {print $6}' <<<"${rows}")"
     [[ "${reported}" == "${new_data}" ]] || die "неожиданный путь после переименования: ${reported}; копия: ${recovery}"
     service="postgresql@${version}-${new_name}.service"
+    phase=service
+    remove_cluster_service_files "${version}" "${new_name}" defer
     new_unit="$(systemd_unit_dir)/${service}"
     if [[ -f "${recovery}/unit.service" ]]; then
         cp -- "${recovery}/unit.service" "${new_unit}" || die "не удалось записать новый unit"
-        replace_literal_in_file "${conf}" "${new_conf}" "${new_unit}"
-        replace_literal_in_file "${data}" "${new_data}" "${new_unit}"
-        replace_literal_in_file "${version}-${name}" "${version}-${new_name}" "${new_unit}"
+        rewrite_renamed_cluster_file "${new_unit}" "${conf}" "${new_conf}" "${data}" "${new_data}" "${version}-${name}" "${version}-${new_name}"
     else
         write_cluster_unit_file "${new_unit}" "${version}" "${new_name}" "${new_data}"
     fi
-    remove_cluster_service_files "${version}" "${name}"
+    remove_cluster_service_files "${version}" "${name}" defer
+    for candidate in "${enabled_links[@]}"; do
+        link="${candidate%/*}/${new_service}"
+        [[ ! -e "${link}" && ! -L "${link}" || -L "${link}" ]] || die "целевой автозапуск изменился: ${link}"
+        rm -f -- "${candidate}" "${link}"
+        ln -s -- "${new_unit}" "${link}" || die "не удалось перенести автозапуск: ${link}"
+    done
     mkdir -p /.postgres/systemd/save
     cp --remove-destination -- "${new_unit}" "/.postgres/systemd/save/${service}" || die "не удалось обновить копию unit"
     ensure_symlink "${new_unit}" "/.postgres/systemd/${service}"
-    systemctl daemon-reload || die "не удалось перечитать systemd"
-    if [[ "${was_enabled}" == yes ]]; then systemctl enable "${service}" || die "не удалось включить новую службу"; fi
+    phase=daemon-reload
+    timeout -k 5s 15s systemctl daemon-reload || die "не удалось перечитать systemd"
+    phase=start
     if [[ "${was_online}" == yes ]]; then start_cluster_checked "${version}" "${new_name}"; fi
+    [[ "$(cluster_power_state "${version}" "${new_name}")" == "${status}" ]] || die "итоговое состояние кластера не совпало с исходным"
+    printf 'phase=complete\n' >>"${recovery}/rename-state.env"
     printf 'Кластер %s/%s переименован в %s/%s. Каталог данных: %s.\n' "${version}" "${name}" "${version}" "${new_name}" "${new_data}"
     warn "задания cron и внешние подключения со старым именем проверьте отдельно; имена БД и ролей не изменены"
-}
+)
 
 rename_cluster_menu() {
     local version name port status owner data log new_name conflict new_data
@@ -2778,11 +2874,8 @@ remove_cluster_directory_exact() {
 remove_cluster_service_files() {
     local version="$1" name="$2" bounded="${3:-no}" service candidate
     service="postgresql@${version}-${name}.service"
-    # Direct deletion unlinks the exact autostart link below, without calling
-    # systemctl disable (which can itself fail/hang on affected Astra WSL).
-    if [[ "${bounded}" != yes ]]; then
-        systemctl disable "${service}" >/dev/null 2>&1 || true
-    fi
+    # Never call disable for instance units. Rename defers the single bounded
+    # reload until the new config/unit and preserved autostart links are ready.
     for candidate in \
         "/etc/systemd/system/${service}" \
         "/etc/systemd/system/multi-user.target.wants/${service}" \
@@ -2792,10 +2885,8 @@ remove_cluster_service_files() {
         "/.postgres/systemd/save/${service}"; do
         rm -f -- "${candidate}"
     done
-    if [[ "${bounded}" == yes ]]; then
+    if [[ "${bounded}" != defer ]]; then
         timeout -k 5s 15s systemctl daemon-reload || die "не удалось обновить systemd после удаления ${service}"
-    else
-        systemctl daemon-reload
     fi
 }
 

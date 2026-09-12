@@ -1,17 +1,29 @@
 #!/usr/bin/env bash
 # Purpose: stage a release on Linux FS to avoid DrvFS package ownership/mode issues.
-# Usage: bash tools/prx-build-release-local.sh REPO VERSION JOURNAL_VERSION
+# Usage: bash tools/prx-build-release-local.sh REPO VERSION JOURNAL_VERSION [BASELINE_VERSION]
 # Args: REPO -- source directory; VERSION -- release; JOURNAL_VERSION -- evidence version.
+#   BASELINE_VERSION -- optional local DEB whose shell logic must remain unchanged.
 # Output: verified gzip-only DEB in REPO/dist; no package installation.
 # Example: bash tools/prx-build-release-local.sh /mnt/d/Ai/pg_claster_creator 2.2.0 2.1.2
 set -Eeuo pipefail
 repo="$1"; version="$2"; journal_version="$3"
+baseline_version="${4:-}"
 stage="$(mktemp -d /tmp/pgcc-release.XXXXXX)"
 trap 'rm -rf -- "$stage"' EXIT
 for f in create-claster.sh create-claster-backup.sh create-claster-deb.sh .new-claster.config README.md TEST.md CHANGELOG.md "TEST-$journal_version-journal-passed.md"; do
     cp -- "$repo/$f" "$stage/$f"
 done
 cp -R -- "$repo/man" "$stage/man"
+if [[ -n "$baseline_version" ]]; then
+    dpkg-deb -x "$repo/dist/claster-creator-$baseline_version.deb" "$stage/baseline"
+    for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
+        # Ignore only comments and the release constant, not executable logic.
+        sed '/^#/d; /^readonly SCRIPT_VERSION=/d' "$stage/$name" >"$stage/current-code"
+        sed '/^#/d; /^readonly SCRIPT_VERSION=/d' "$stage/baseline/usr/local/share/pg_claster_creator/$name" >"$stage/baseline-code"
+        cmp "$stage/current-code" "$stage/baseline-code"
+        printf 'PASS: unchanged logic against %s: %s\n' "$baseline_version" "$name"
+    done
+fi
 # Refuse an unexpected external config in the build environment.
 [[ ! -e /usr/local/shared/pg_claster_creator/.new-claster.config ]]
 for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
