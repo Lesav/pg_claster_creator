@@ -85,11 +85,17 @@ for mode in 2 3 4; do
     step "REINSTALL-PRESERVED-$mode" 0 test "$(sql "$target" "$db" 'SELECT id FROM public.qa_keep')" = 235
     step "FORCE-CLUSTER-$mode" 0 timeout -k 5 900 env CLASTER_FORCE_INSTALL=1 DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install -y --reinstall "$deb"
     step "FORCE-RESET-$mode" 0 test "$(sql "$target" "$db" "SELECT to_regclass('public.qa_keep') IS NULL")" = t
+    if [[ "$mode" != 2 ]]; then step "FORCE-FULL-$mode" 0 verify_reference "$target" "$db"; fi
     if [[ "$mode" == 4 ]]; then
         identifier="$(sql "$target" "$db" 'SELECT system_identifier FROM pg_control_system()')"
+        step FORCE-DB-MUTATE 0 sql "$target" "$db" 'CREATE TABLE public.qa_force_stale(id int); UPDATE pgcc_owner.parent_control SET qty=qty+10'
+        step FORCE-DB-NEIGHBOR 0 sql "$target" postgres 'CREATE TABLE public.qa_neighbor(id int); INSERT INTO public.qa_neighbor VALUES(242)'
         step FORCE-DB 0 timeout -k 5 900 env CLASTER_FORCE_DB_INSTALL=1 DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install -y --reinstall "$deb"
         step FORCE-DB-CLUSTER-PRESERVED 0 test "$(sql "$target" "$db" 'SELECT system_identifier FROM pg_control_system()')" = "$identifier"
         step FORCE-DB-CHECK 0 test "$(sql "$target" "$db" "$query")" = "$baseline"
+        step FORCE-DB-FULL 0 verify_reference "$target" "$db"
+        step FORCE-DB-STALE-ABSENT 0 test "$(sql "$target" "$db" "SELECT to_regclass('public.qa_force_stale') IS NULL")" = t
+        step FORCE-DB-NEIGHBOR-PRESERVED 0 test "$(sql "$target" postgres 'SELECT id FROM public.qa_neighbor')" = 242
         step BOTH-FORCE-REJECT nonzero timeout -k 5 120 env CLASTER_FORCE_INSTALL=1 CLASTER_FORCE_DB_INSTALL=1 DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install -y --reinstall "$deb"
     fi
 done

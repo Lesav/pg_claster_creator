@@ -9,6 +9,8 @@ repo="$(realpath "$1")"
 fixture="$(mktemp -d /tmp/pgcc-power-test.XXXXXX)"
 trap 'rm -rf -- "$fixture"' EXIT
 source "$repo/create-claster.sh"
+# Sourcing the product installs its EXIT trap; restore ownership of this fixture.
+trap 'rm -rf -- "$fixture"' EXIT
 NON_INTERACTIVE=0
 header() { :; }; step() { :; }; pause() { :; }
 pg_lsclusters() {

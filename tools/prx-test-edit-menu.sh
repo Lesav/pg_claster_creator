@@ -9,6 +9,8 @@ repo="$(realpath "$1")"
 fixture="$(mktemp -d /tmp/pgcc-edit-menu.XXXXXX)"
 trap 'rm -rf -- "$fixture"' EXIT
 source "$repo/create-claster.sh"
+# Sourcing the product installs its EXIT trap; restore ownership of this fixture.
+trap 'rm -rf -- "$fixture"' EXIT
 header() { printf 'SCREEN\n'; }
 step() { printf '%s\n' "$1"; }
 # The heading must use the current selection, without querying installed packages.

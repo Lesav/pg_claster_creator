@@ -9,6 +9,8 @@ repo="$(realpath "$1")"
 fixture="$(mktemp -d /tmp/pgcc-delete.XXXXXX)"
 trap 'rm -rf -- "$fixture"' EXIT
 source "$repo/create-claster.sh"
+# Sourcing the product installs its EXIT trap; restore ownership of this fixture.
+trap 'rm -rf -- "$fixture"' EXIT
 for fn in validate_cluster_delete_paths delete_cluster_checked remove_cluster_service_files; do
     eval "$(declare -f "$fn" | sed "s#/etc/#$fixture/etc/#g; s#/usr/lib/#$fixture/usr/lib/#g; s#\"/lib/#\"$fixture/lib/#g; s#/.postgres/#$fixture/.postgres/#g; s#/var/log/#$fixture/var/log/#g")"
 done

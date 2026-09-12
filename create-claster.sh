@@ -9,6 +9,9 @@
 #   PostgreSQL clusters on Astra Linux and compatible Debian-based systems.
 #   The script supports PostgreSQL, Postgres Pro Enterprise, and Tantor Free/SE/BE.
 #   It can run as an interactive menu or as a fully non-interactive command.
+#   Screen clearing is limited to stdout terminals with a usable TERM.
+#   Cold restore resets only /var/log/postgresql to root:postgres 1775 after
+#   extraction, before startup; existing log-file permissions are not changed.
 #   The main menu heading shows the selected server package for new clusters.
 #   Server package selection exits on 0, invalid/empty input or EOF without retrying.
 #   Cluster deletion stops and verifies the server, then removes exact cluster
@@ -84,7 +87,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.4.2"
+readonly SCRIPT_VERSION="2.4.3"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -220,6 +223,9 @@ usage() {
 аргумента ВЕРСИЯ КЛАСТЕР после действия, например: backup 16 subsys.
 
 Значения ДА|НЕТ: yes/no, y/n, true/false, 1/0.
+
+После холодного restore каталог /var/log/postgresql получает root:postgres 1775
+без изменения прав вложенных лог-файлов; ошибка установки прав запрещает запуск.
 
 Переменные окружения:
   PGCC_ACTION, PGCC_PACKAGE, PGCC_PG_FAMILY, PGCC_PG_VERSION,
@@ -412,12 +418,19 @@ startup_notice() {
     PRESERVE_NEXT_CLEAR=1
 }
 
+clear_screen() {
+    # Interactive menus may also be piped to a log; never emit terminal controls there.
+    [[ -t 1 ]] || return 0
+    case "${TERM:-}" in ''|dumb|unknown) return 0 ;; esac
+    clear 2>/dev/null || true
+}
+
 header() {
     if ((!NON_INTERACTIVE)); then
         if ((PRESERVE_NEXT_CLEAR)); then
             PRESERVE_NEXT_CLEAR=0
         else
-            clear 2>/dev/null || true
+            clear_screen
         fi
     fi
     printf '%s, версия %s\n%s\n' "${SCRIPT_NAME}" "${SCRIPT_VERSION}" "${SEPARATOR}"
@@ -3214,6 +3227,16 @@ restore_hot_backup() {
     pause
 }
 
+restore_log_directory_permissions() {
+    # Restore Astra postgresql-common defaults on the shared directory only.
+    # Never recurse into existing logs or follow an archive-supplied final symlink.
+    local log_dir=/var/log/postgresql
+    [[ ! -L "${log_dir}" ]] || die "каталог журналов ${log_dir} является символьной ссылкой; права не изменены"
+    mkdir -p -- "${log_dir}" || die "не удалось создать каталог журналов ${log_dir}"
+    chown root:postgres -- "${log_dir}" || die "не удалось установить владельца root:postgres для ${log_dir}"
+    chmod 1775 -- "${log_dir}" || die "не удалось установить права 1775 для ${log_dir}"
+}
+
 restore_menu() {
     local choice archive stage info service_file version name package entry unit_dir candidate
     local cluster_name cluster_port pg_version data_dir log_file
@@ -3346,6 +3369,8 @@ restore_menu() {
     tar "${transform_args[@]}" --keep-directory-symlink -xzf "${archive}" -C / --strip-components=1 \
         --exclude='root/backup-info.env' --exclude='root/.postgres/systemd/save'
 
+    restore_log_directory_permissions
+
     while IFS= read -r -d '' file; do
         replace_literal_in_file "${original_data_dir}" "${restore_data_dir}" "${file}"
         replace_literal_in_file "${original_conf_dir}" "${restore_conf_dir}" "${file}"
@@ -3432,7 +3457,7 @@ info_menu() {
         read -r -p "Выберите кластер: " choice || return 0
         if [[ ! "${choice}" =~ ^[0-9]+$ ]] || \
            ((choice < 0 || choice > ${#rows[@]})); then
-            clear 2>/dev/null || true
+            clear_screen
             return 0
         fi
         ((choice == 0)) && return 0
@@ -3474,7 +3499,7 @@ info_menu() {
             fi
         fi
         read -r -p "Выбор: " _ || return 0
-        clear 2>/dev/null || true
+        clear_screen
     done
 }
 
@@ -3526,7 +3551,7 @@ main_menu() {
             5) backup_menu ;;
             6) restore_menu ;;
             7) delete_menu ;;
-            *) clear 2>/dev/null || true; exit 0 ;;
+            *) clear_screen; exit 0 ;;
         esac
     done
 }

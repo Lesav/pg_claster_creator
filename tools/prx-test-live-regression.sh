@@ -2,9 +2,11 @@
 # Purpose: isolated live core regression, preserving pre-existing clusters and config.
 # Usage: bash tools/prx-test-live-regression.sh REPO DISTRO PG_VERSION PACKAGE FAMILY PORT RELEASE LOG_ROOT [PHASE]
 # Args: RELEASE -- scripts-only package version; LOG_ROOT -- new per-run evidence directory;
-#   PHASE -- core, extra, ports, ui, tail, cleanup-only or cleanup-ui.
+#   PHASE -- core, extra, ports, ui, tail, extension, extension-r2, cleanup-only or cleanup-ui.
+#   For extension, PGCC_LIVE_EXTENSION names a trusted local sourced test module.
 #   Other arguments identify the QA host/server; a failed phase is not a full-plan PASS.
 # Output: per-step logs/results, isolated archives; only owned temporary clusters are deleted.
+#   Full dump/role fingerprints and restored LOGIN are checked on hot/cold/DEB targets.
 # Example: bash tools/prx-test-live-regression.sh /repo Astra 18 tantor-be-server-18 tantor-be 57210 2.4.0 /repo/tmp/run
 set -Eeuo pipefail
 repo="$1"; distro="$2"; v="$3"; package="$4"; family="$5"; port="$6"
@@ -30,9 +32,29 @@ fi
 if [[ "$phase" == ports ]]; then
     work="${work}-$phase"; logs="${logs}-$phase"; backup="$work/backups"
 fi
+if [[ "$phase" == extension || "$phase" == extension-r2 ]]; then
+    [[ -f "${PGCC_LIVE_EXTENSION:-}" ]] || exit 2
+    suffix=x; [[ "$phase" != extension-r2 ]] || suffix=x2
+    c="${c}$suffix"; work="${work}-$phase"; logs="${logs}-$phase"; data_root="${data_root}-$phase"; backup="$work/backups"
+fi
 creator=/usr/local/bin/create-claster.sh
 builder=/usr/local/share/pg_claster_creator/create-claster-deb.sh
 wrapper=/usr/local/bin/create-claster-backup.sh
+db_fingerprint() {
+    runuser -u postgres -- pg_dump --cluster "$v/$1" -d "$2" --no-comments | sed '/^\\restrict /d; /^\\unrestrict /d' | sha256sum | awk '{print $1}'
+}
+role_fingerprint() {
+    runuser -u postgres -- psql --cluster "$v/$1" -X -Atqc "SELECT rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls FROM pg_roles WHERE rolname LIKE 'pgcc_%' ORDER BY rolname" postgres | sha256sum | awk '{print $1}'
+}
+verify_reference() {
+    local target="$1" db="$2" actual target_port
+    actual="$(db_fingerprint "$target" "$db")" || return 1
+    printf 'dump_sha=%s expected=%s\n' "$actual" "$(<"$core_work/source.dump.sha")"
+    [[ "$actual" == "$(<"$core_work/source.dump.sha")" ]] || return 1
+    [[ "$(role_fingerprint "$target")" == "$(<"$core_work/source.roles.sha")" ]] || return 1
+    target_port="$(pg_lsclusters --no-header | awk -v v="$v" -v n="$target" '$1==v && $2==n {print $3}')"
+    [[ "$(PGPASSWORD='Pgcc-ACL-2.1.1!' psql --cluster "$v/$target" -h 127.0.0.1 -p "$target_port" -U pgcc_acl_login -d "$db" -X -Atqc 'SELECT count(*) FROM pgcc_owner.parent_control')" == 100 ]]
+}
 if [[ "$phase" == cleanup-only || "$phase" == cleanup-ui ]]; then
     [[ -f "$work/original-clusters" && -f "$work/config-shared" && -f "$work/config-share" ]] || exit 2
 else
@@ -122,6 +144,10 @@ cleanup() {
 }
 trap cleanup EXIT
 [[ "$phase" != cleanup-only && "$phase" != cleanup-ui ]] || exit 0
+if [[ "$phase" == extension || "$phase" == extension-r2 ]]; then
+    source "$PGCC_LIVE_EXTENSION"
+    exit 0
+fi
 if [[ "$phase" == ui || "$phase" == tail ]]; then
     source "$repo/tools/prx-test-live-ui.sh"
     exit 0
@@ -139,6 +165,9 @@ step DATA 0 timeout -k 5 180 bash "$repo/tools/prx-prepare-postgres-test-data.sh
 sql() { runuser -u postgres -- psql --cluster "$v/$1" -X --set=ON_ERROR_STOP=1 --dbname "$2" -Atqc "$3"; }
 query="SELECT count(*), md5(string_agg(id::text || ':' || payload || ':' || qty::text, ',' ORDER BY id)) FROM ONLY pgcc_owner.parent_control"
 baseline="$(sql "$c" "$c" "$query")"
+db_fingerprint "$c" "$c" >"$work/source.dump.sha"
+role_fingerprint "$c" >"$work/source.roles.sha"
+step SOURCE-FULL 0 verify_reference "$c" "$c"
 step INFO 0 timeout -k 5 30 "$creator" --action info
 step HOT 0 timeout -k 5 900 bash "$repo/tools/prx-test-postgres-backups.sh" "$v" "$c" hot "$c" "$backup" "$creator"
 step COLD 0 timeout -k 5 900 bash "$repo/tools/prx-test-postgres-backups.sh" "$v" "$c" cold "$c" "$backup" "$creator"
@@ -146,6 +175,7 @@ hot="$(find "$backup" -maxdepth 1 -name '*-dmp.tar.gz' -print -quit)"
 cold="$(find "$backup" -maxdepth 1 -name "$v-$c-????????-??????.tar.gz" -print -quit)"
 step HOT-RESTORE 0 timeout -k 5 900 "$creator" --action restore --backup-file "$hot" --pg-version "$v" --cluster-name "$c" --database qa_restore --backup-dir "$backup"
 step HOT-CHECK 0 test "$(sql "$c" qa_restore "$query")" = "$baseline"
+step HOT-FULL 0 verify_reference "$c" qa_restore
 step HOT-MUTATE 0 sql "$c" qa_restore 'CREATE TABLE public.qa_stale(id int); UPDATE pgcc_owner.parent_control SET qty=qty+100'
 changed="$(sql "$c" qa_restore "$query")"
 step HOT-REFUSE nonzero timeout -k 5 120 "$creator" --action restore --backup-file "$hot" --pg-version "$v" --cluster-name "$c" --database qa_restore --backup-dir "$backup"
@@ -153,9 +183,11 @@ step HOT-REFUSE-PRESERVED 0 test "$(sql "$c" qa_restore "$query")" = "$changed"
 step HOT-OVERWRITE 0 timeout -k 5 900 "$creator" --action restore --backup-file "$hot" --pg-version "$v" --cluster-name "$c" --database qa_restore --overwrite yes --backup-dir "$backup"
 step HOT-OVERWRITE-CHECK 0 test "$(sql "$c" qa_restore "$query")" = "$baseline"
 step HOT-STALE-REMOVED 0 test "$(sql "$c" qa_restore "SELECT to_regclass('public.qa_stale') IS NULL")" = t
+step HOT-OVERWRITE-FULL 0 verify_reference "$c" qa_restore
 step PORT-DATA 0 timeout -k 5 900 bash "$repo/tools/prx-test-postgres-port-data.sh" "$v" "$c" "$port" "$((port+50))" "$c" "$query" "$data_root" - "$creator"
 step COLD-RESTORE 0 timeout -k 5 900 "$creator" --action restore --backup-file "$cold" --cluster-name "${c}cold" --port "$((port+1))" --data-root "$data_root" --backup-dir "$backup"
 step COLD-CHECK 0 test "$(sql "${c}cold" "$c" "$query")" = "$baseline"
+step COLD-FULL 0 verify_reference "${c}cold" "$c"
 step COLD-CONFLICT nonzero timeout -k 5 120 "$creator" --action restore --backup-file "$cold" --cluster-name "${c}cold" --port "$((port+1))" --backup-dir "$backup"
 for n in 1 2 3; do
     step "ROTATION-$n" 0 timeout -k 5 900 "$wrapper" "$v" "$c" "$c" --backup-dir "$work/rotation" --files-cnt 2
@@ -184,5 +216,9 @@ for mode in 2 3 4; do
         4) step DEB-HOT-CHECK 0 test "$(sql "${c}m4" qa_m4 "$query")" = "$baseline" ;;
     esac
     step "DEB-REINSTALL-$mode" 0 timeout -k 5 900 env DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confold install -y --reinstall "$deb"
+    case "$mode" in
+        3) step DEB-COLD-FULL 0 verify_reference "${c}m3" "$c" ;;
+        4) step DEB-HOT-FULL 0 verify_reference "${c}m4" qa_m4 ;;
+    esac
 done
 printf 'CORE COMPLETED\n'

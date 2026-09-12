@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Purpose: archive owned deployment markers and verify the live runner's final baseline.
-# Usage: bash tools/prx-audit-live-regression.sh REPO DISTRO PORT RELEASE LOG_ROOT
+# Usage: bash tools/prx-audit-live-regression.sh REPO DISTRO PORT RELEASE LOG_ROOT [LABEL]
 # Args: PORT/RELEASE identify the existing prx-test-live-regression work directory.
-# Output: fresh final-audit.log, protected recoverable markers, nonzero on audit failure.
+#   LABEL optionally distinguishes a later audit without replacing previous evidence.
+# Output: fresh final-audit[-LABEL].log, protected recoverable markers, nonzero on audit failure.
 # Example: bash tools/prx-audit-live-regression.sh /repo Astra 57210 2.4.0 /repo/tmp/run
 set -Eeuo pipefail
 repo="$1"; distro="$2"; port="$3"; release="$4"; token="${4//./}"
@@ -10,11 +11,18 @@ repo="$1"; distro="$2"; port="$3"; release="$4"; token="${4//./}"
 work="/var/tmp/pgcc$token-$port"
 logs="$5/$distro"
 [[ -f "$work/original-clusters" && -d "$logs" ]]
-[[ ! -e "$logs/final-audit.log" ]]
-exec >"$logs/final-audit.log" 2>&1
+label="${6:-}"
+[[ -z "$label" || "$label" =~ ^[a-z0-9-]+$ ]] || exit 2
+audit="$logs/final-audit${label:+-$label}.log"
+[[ ! -e "$audit" ]]
+exec >"$audit" 2>&1
 date --iso-8601=seconds
 recovery="$work/retained-markers"
-mkdir -m 700 "$recovery"
+if [[ -e "$recovery" ]]; then
+    [[ -d "$recovery" && ! -L "$recovery" && "$(stat -c '%a %u' "$recovery")" == '700 0' ]] || exit 2
+else
+    mkdir -m 700 "$recovery"
+fi
 while IFS= read -r deb; do
     plan="${deb##*/}"; plan="${plan%.deb}"
     [[ "$plan" == claster-creator-"$release"-*qa"${token}_${port}"* ]] || exit 2
@@ -56,7 +64,7 @@ printf '\nConvenience links:\n'
 find /.postgres -maxdepth 1 -type l -printf '%p -> %l\n'
 printf '\nProcesses relevant to interrupted operations:\n'
 ps -eo pid,ppid,stat,comm | grep -E 'postgres|pg_dropcluster|syslog-ng-ctl' || true
-for phase in '' -extra -ports -ui -tail; do
+for phase in '' -extra -ports -ui -tail -extension -extension-r2; do
     owned="$work$phase"
     [[ ! -d "$owned" ]] || { stat -c '%a %U:%G %n' "$owned"; find "$owned" -maxdepth 3 -type f \( -name '*.deb' -o -name '*.tar.gz' \) -exec sha256sum {} +; }
 done

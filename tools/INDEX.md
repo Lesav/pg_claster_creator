@@ -20,3 +20,6 @@ prx-audit-live-regression.sh — archive owned test markers and verify final WSL
 prx-test-package-journal.sh — verify mode-1 payload, gzip and required historical journal
 prx-test-cluster-delete-live.sh — test live deletion with optional prefix/reverse rename regression
 prx-test-live-ui.sh — test real rename, ENV, generated cron commands and database deletion
+prx-test-full-contracts.sh — test argument, dependency and size contracts without changing services
+prx-test-live-edges.sh — test restore edge cases with archive and parent metadata checks
+prx-test-screen-log-permissions.py — test TTY output, cold log permissions and legacy archive metadata

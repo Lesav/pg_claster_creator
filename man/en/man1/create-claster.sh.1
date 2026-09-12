@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-12" "pg_claster_creator 2.4.2" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-12" "pg_claster_creator 2.4.3" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -86,6 +86,10 @@ Create a cold cluster archive or a hot custom-format database dump.
 .TP
 .B restore
 Restore a cold cluster archive or a hot database dump.
+After cold extraction, before starting the cluster, set /var/log/postgresql
+to root:postgres mode 1775 without recursion. Existing log files retain their
+permissions. A directory symlink or a failure to create/chown/chmod the directory
+aborts restoration. This does not sanitize other shared parent directory entries.
 .TP
 .B delete
 Delete a cluster. Interactive mode can also delete one database. Before
