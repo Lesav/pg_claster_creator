@@ -74,6 +74,22 @@ assert() { [[ "$1" == "$2" ]] || { printf 'FAIL: %s != %s\n' "$1" "$2" >&2; exit
     assert "$SELECTED_PACKAGE" tantor-se-server-17
     choose_from_packages test tantor-se-server-16 tantor-se-server-17 <<<1 >/dev/null
     assert "$SELECTED_PACKAGE" tantor-se-server-17
+    choose_from_packages test tantor-se-server-17 tantor-be-server-18 <<<2 >/dev/null
+    assert "$SELECTED_PACKAGE" tantor-be-server-18
+    for input in 0 '' invalid 9 -1 1.5 08 01 18446744073709551617; do
+        (
+            choose_from_packages cancel-test tantor-se-server-17 tantor-be-server-18
+            printf 'UNEXPECTED_CONTINUATION\n'
+        ) <<<"${input}"$'\n1' >"$fixture/package-cancel" 2>&1
+        assert "$(grep -c '^cancel-test$' "$fixture/package-cancel")" 1
+        ! grep -Eq 'UNEXPECTED_CONTINUATION|неверный номер|error' "$fixture/package-cancel"
+    done
+    (
+        choose_from_packages cancel-test tantor-se-server-17
+        printf 'UNEXPECTED_CONTINUATION\n'
+    ) </dev/null >"$fixture/package-eof"
+    ! grep -q UNEXPECTED_CONTINUATION "$fixture/package-eof"
+    printf 'OK: package choice exits on zero/invalid/empty/EOF without retrying\n'
     apt-cache() { printf '%s\n' tantor-se-server-17 tantor-be-server-18 tantor-be-client-18 postgresql-server-dev-18 tantor-free-server-16; }
     assert "$(server_packages | wc -l)" 3
     package_installed() { return 0; }

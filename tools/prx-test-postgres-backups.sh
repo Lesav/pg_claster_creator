@@ -42,7 +42,7 @@ printf '%s\n' '-- archive members --'
 tar -tzf "${archive}"
 printf '%s\n' '-- metadata --'
 metadata_member="$(tar -tzf "${archive}" | grep -E '(^|/)backup-info\.env$' | head -1)"
-tar -xOf "${archive}" "${metadata_member}"
+tar -xOf "${archive}" "${metadata_member}" | sed -E '/(password|cls_pw|PGPASSWORD)/I s/.*/[REDACTED credential metadata]/'
 if [[ "${backup_type}" == hot ]]; then
     work_dir="$(mktemp -d)"
     trap 'rm -rf -- "${work_dir}"' EXIT

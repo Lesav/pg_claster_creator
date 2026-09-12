@@ -2,7 +2,7 @@
 # Purpose: stage a release on Linux FS to avoid DrvFS package ownership/mode issues.
 # Usage: bash tools/prx-build-release-local.sh REPO VERSION JOURNAL_VERSION
 # Args: REPO -- source directory; VERSION -- release; JOURNAL_VERSION -- evidence version.
-# Output: verified DEB in REPO/dist; no package installation.
+# Output: verified gzip-only DEB in REPO/dist; no package installation.
 # Example: bash tools/prx-build-release-local.sh /mnt/d/Ai/pg_claster_creator 2.2.0 2.1.2
 set -Eeuo pipefail
 repo="$1"; version="$2"; journal_version="$3"
@@ -20,7 +20,9 @@ for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
     bash "$stage/$name" --help >/dev/null
 done
 bash "$stage/create-claster-deb.sh" --mode 1 --non-interactive --output-dir "$repo/dist" --force
+[[ ! -e "$stage/tmp" ]]
 package="$repo/dist/claster-creator-$version.deb"
+[[ "$(ar t "$package")" == $'debian-binary\ncontrol.tar.gz\ndata.tar.gz' ]]
 [[ "$(dpkg-deb -f "$package" Version)" == "$version" ]]
 dpkg-deb --fsys-tarfile "$package" > "$stage/payload.tar"
 member="./usr/local/share/pg_claster_creator/TEST-$journal_version-journal-passed.md"
@@ -40,4 +42,4 @@ for mode in 1 2 3 4; do
     if (source "$stage/check-builder.sh"; MODE="$mode"; build_package) > "$stage/error" 2>&1; then exit 1; fi
     grep -q 'не найден журнал успешного тестирования' "$stage/error"
 done
-echo 'PASS: version, help, syntax, journal bytes/path/0644, source config/scripts/docs, missing-journal rejection'
+echo 'PASS: tmp cleanup, gzip control/data, version, help, syntax, journal bytes/path/0644, source config/scripts/docs, missing-journal rejection'

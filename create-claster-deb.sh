@@ -7,10 +7,12 @@
 # Purpose:
 #   Build installable Debian packages for create-claster.sh. For every build,
 #   the script creates a fresh root filesystem skeleton below tmp, populates it,
-#   and removes it on exit. Completed packages are written to dist unless another
-#   output directory is requested. With no --mode argument, the script opens an
+#   and removes it on exit. A tmp parent created by this run is removed only if
+#   it is empty. Completed packages are written to dist unless another output
+#   directory is requested. With no --mode argument, the script opens an
 #   interactive mode selection menu. Modes 2-4 generate an idempotent postinst
 #   deployment procedure; --mode 1 performs a direct scripts-only package build.
+#   Control and data archives always use gzip for older Astra Linux dpkg readers.
 #   Interactive steps clear the terminal; invalid input goes back one step.
 #   Submenus offer 0 (back); invalid main-menu input and EOF exit without building.
 #   After an interactive build is confirmed, create-claster-deb-last.sh is written
@@ -18,12 +20,14 @@
 #   The executable helper repeats the validated build without prompts.
 #   Completion markers are accepted only while the target cluster is actually
 #   registered; stale markers are cleared automatically before redeployment.
+#   Forced redeployment delegates deletion to create-claster.sh, which validates
+#   a stopped cluster and removes exact paths without pg_dropcluster/syslog reload.
 #   Every package installs this builder below /usr/local/share/pg_claster_creator
 #   but intentionally does not create a command symlink for it in /usr/local/bin.
 #   All modes require the explicitly selected validation journal beside the builder
 #   and install it into the same share directory with mode 0644. Missing release
 #   evidence aborts the build. The 2.1.2 journal is historical; it does not
-#   validate the new 2.3.2 features. See TEST.md for the current test scope.
+#   validate the new 2.4.0 features. See TEST.md for the current test scope.
 #
 # Package modes accepted by --mode:
 #   1  Install scripts, configuration, documentation, and the command symlink.
@@ -86,7 +90,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.3.2"
+readonly SCRIPT_VERSION="2.4.0"
 # Bump this only when a new functional validation journal is available.
 readonly TEST_JOURNAL_VERSION="2.1.2"
 readonly TEST_JOURNAL_NAME="TEST-${TEST_JOURNAL_VERSION}-journal-passed.md"
@@ -118,6 +122,7 @@ MOVE_AFTER_RESTORE="no"
 PREFER_NEWEST_SERVER="no"
 FORCE_BUILD=0
 BUILD_WORK_DIR=""
+TMP_DIR_CREATED=0
 BUILD_ROOT=""
 LAST_COMMAND_TMP=""
 META_TEXT=""
@@ -273,6 +278,10 @@ cleanup() {
     if [[ -n "${BUILD_WORK_DIR}" && -n "${TMP_DIR}" && \
           "${BUILD_WORK_DIR}" == "${TMP_DIR}/create-claster-deb."* ]]; then
         rm -rf -- "${BUILD_WORK_DIR}"
+    fi
+    # Never recursively remove the shared parent or a directory owned by another run.
+    if ((TMP_DIR_CREATED)) && [[ -d "${TMP_DIR}" && ! -L "${TMP_DIR}" ]]; then
+        rmdir -- "${TMP_DIR}" 2>/dev/null || true
     fi
     if [[ -n "${LAST_COMMAND_TMP}" ]]; then
         case "${LAST_COMMAND_TMP}" in
@@ -972,7 +981,15 @@ validate_options() {
     fi
     normalize_extra_dependencies || die \
         "--depends принимает имена DEB-пакетов через запятую без условий версий"
-    mkdir -p -- "${TMP_DIR}" || die "не удалось создать служебный каталог ${TMP_DIR}"
+    if [[ ! -e "${TMP_DIR}" && ! -L "${TMP_DIR}" ]]; then
+        if mkdir -- "${TMP_DIR}" 2>/dev/null; then
+            TMP_DIR_CREATED=1
+        else
+            # A concurrent build may have created the parent first; it is not ours.
+            [[ -d "${TMP_DIR}" && ! -L "${TMP_DIR}" ]] || die \
+                "не удалось создать служебный каталог ${TMP_DIR}"
+        fi
+    fi
     [[ -d "${TMP_DIR}" && ! -L "${TMP_DIR}" ]] || die \
         "служебный путь должен быть обычным каталогом: ${TMP_DIR}"
     command -v dpkg-deb >/dev/null 2>&1 || die "не найдена команда dpkg-deb"
@@ -1508,7 +1525,8 @@ install_manual_pages() {
 
 build_package() {
     local package_base output_file payload_dir dependencies installed_size description
-    local -a build_command=(dpkg-deb --build)
+    # Do not inherit a modern host's zstd default: Astra 1.6/1.7 cannot read it.
+    local -a build_command=(dpkg-deb -Zgzip --uniform-compression --build)
     [[ -f "${SCRIPT_DIR}/${TEST_JOURNAL_NAME}" && -r "${SCRIPT_DIR}/${TEST_JOURNAL_NAME}" ]] || \
         die "не найден журнал успешного тестирования версии ${TEST_JOURNAL_VERSION}: ${SCRIPT_DIR}/${TEST_JOURNAL_NAME}"
     package_base="$(package_basename)"
@@ -1556,7 +1574,7 @@ build_package() {
     if ((EUID != 0)); then
         command -v fakeroot >/dev/null 2>&1 || die \
             "для корректного владельца файлов запустите сценарий от root или установите fakeroot"
-        build_command=(fakeroot dpkg-deb --build)
+        build_command=(fakeroot "${build_command[@]}")
     fi
     if [[ -e "${output_file}" ]]; then
         rm -f -- "${output_file}"

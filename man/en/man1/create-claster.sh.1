@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-11" "pg_claster_creator 2.3.2" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-12" "pg_claster_creator 2.4.0" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -13,7 +13,7 @@ create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH DESCRIPTION
 .B create-claster.sh
 is an interactive and non-interactive administration utility for PostgreSQL,
-Postgres Pro Enterprise, and Tantor Free on APT-based Linux systems.
+Postgres Pro Enterprise, and Tantor Free/SE/BE on APT-based Linux systems.
 It verifies required packages, prepares the service filesystem, and manages
 cluster installation, ports, data placement, backups, restores, databases,
 roles, and deletion.
@@ -23,6 +23,14 @@ Without
 the program opens an interactive menu. Supplying an action or its matching
 .B PGCC_ACTION
 environment variable disables prompts and requires all action-specific values.
+.PP
+The main menu heading shows only the currently selected server package for
+creating new clusters, refreshed on each visit. Other installed packages are
+not listed. This is not a list of running clusters.
+.PP
+At server package selection, enter a number exactly as displayed. Zero, empty
+or invalid input and EOF exit without redisplaying the list or installing the
+selected server package.
 .SH ACTIONS
 .PP
 Interactive menu item 3 asks for a cluster name or list index, offers stop for
@@ -202,6 +210,14 @@ Command-line options override the corresponding variables:
 .BR PGCC_CLEAR_WAL ,
 and
 .BR PGCC_OVERWRITE .
+.SH CLUSTER DELETION
+All supported server families use the same direct deletion procedure without
+pg_dropcluster: stop, verify pg_ctl status and systemd, then remove the exact
+registered data directory, configuration directory and service files.
+Unsafe paths, overlapping cluster data and nested mounts are refused.
+External WAL/tablespace symlink targets and shared logs are preserved.
+The cluster syslog-ng configuration is removed without invoking the potentially
+blocking syslog-ng-ctl reload; it takes effect at the next normal syslog reload.
 .SH FILES
 .TP
 .I /usr/local/shared/pg_claster_creator/.new-claster.config

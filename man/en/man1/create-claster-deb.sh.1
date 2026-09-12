@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-11" "pg_claster_creator 2.3.2" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-12" "pg_claster_creator 2.4.0" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -10,9 +10,14 @@ builds installable Debian packages from the project source tree. It creates a
 fresh filesystem skeleton below
 .IR tmp/create-claster-deb.XXXXXX/rootFs ,
 populates it, builds the package, and removes the temporary tree on exit.
+The tmp parent is removed only if created by this run and empty after cleanup.
+Pre-existing directories and unrelated files are preserved, also on failure.
 Packages are written to
 .I dist
 unless another output directory is selected.
+.PP
+Both control and data archives use gzip explicitly, including fakeroot builds,
+so packages remain readable by older Astra Linux 1.6/1.7 dpkg versions.
 .PP
 With no arguments, an interactive mode menu is shown. Modes 2 through 4 are
 interactive by default; use

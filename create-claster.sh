@@ -7,8 +7,12 @@
 # Purpose:
 #   Prepare a PostgreSQL server installed from APT repositories and manage
 #   PostgreSQL clusters on Astra Linux and compatible Debian-based systems.
-#   The script supports PostgreSQL, Postgres Pro Enterprise, and Tantor Free.
+#   The script supports PostgreSQL, Postgres Pro Enterprise, and Tantor Free/SE/BE.
 #   It can run as an interactive menu or as a fully non-interactive command.
+#   The main menu heading shows the selected server package for new clusters.
+#   Server package selection exits on 0, invalid/empty input or EOF without retrying.
+#   Cluster deletion stops and verifies the server, then removes exact cluster
+#   paths without pg_dropcluster or its potentially blocking syslog-ng reload.
 #   Displayed database and data-directory sizes use an aligned field of at most
 #   nine characters, including a space and a two-letter binary size unit.
 #   Every newly created backup contains a commented, shell-safe command that
@@ -77,7 +81,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.3.2"
+readonly SCRIPT_VERSION="2.4.0"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -174,6 +178,8 @@ usage() {
 Переименовать: проверка нового имени, остановка,
 переименование регистрации/путей и служб; исходное состояние запуска сохраняется.
 Имена БД/ролей и задания cron не переименовываются.
+Удаление кластера: подтверждённая остановка, удаление его данных, конфигурации
+и службы без pg_dropcluster. Внешние цели ссылок WAL/tablespace сохраняются.
 При неинтерактивном install занятый порт автоматически заменяется первым
 следующим свободным; предупреждение показывает фактический порт и команду
 для его последующей смены.
@@ -612,7 +618,7 @@ server_family_priority() {
 }
 
 choose_from_packages() {
-    local title="$1" choice fields package version previous index version_priority invalid=0
+    local title="$1" choice fields package version previous index version_priority
     shift
     local -a packages=("$@") ordered=()
     mapfile -t ordered < <(
@@ -624,36 +630,31 @@ choose_from_packages() {
     )
     ((${#ordered[@]})) || return 1
 
-    while true; do
-        if ((invalid)); then
-            header
-            step "Подготовка пакетов"
-            warn "неверный номер"
+    printf '\n%s\n' "${title}"
+    previous=""
+    index=0
+    version_priority=0
+    for package in "${ordered[@]}"; do
+        fields="$(package_to_fields "${package}")"
+        version="${fields#*|}"
+        if [[ "$(server_family_priority "${fields%%|*}")|${version}" != "${previous}" ]]; then
+            ((version_priority += 1))
+            printf '\nPostgreSQL %s:\n' "${version}"
+            previous="$(server_family_priority "${fields%%|*}")|${version}"
         fi
-        printf '\n%s\n' "${title}"
-        previous=""
-        index=0
-        version_priority=0
-        for package in "${ordered[@]}"; do
-            fields="$(package_to_fields "${package}")"
-            version="${fields#*|}"
-            if [[ "$(server_family_priority "${fields%%|*}")|${version}" != "${previous}" ]]; then
-                ((version_priority += 1))
-                printf '\nPostgreSQL %s:\n' "${version}"
-                previous="$(server_family_priority "${fields%%|*}")|${version}"
-            fi
-            ((index += 1))
-            printf '  %d - %s (приоритет %s)\n' "${index}" "${package}" "${version_priority}"
-        done
-        printf '  0 - Выход\n'
-        read -r -p "Выберите пакет: " choice || exit 0
-        [[ "${choice}" == "0" ]] && exit 0
-        if [[ "${choice}" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#ordered[@]} )); then
-            SELECTED_PACKAGE="${ordered[choice-1]}"
+        ((index += 1))
+        printf '  %d - %s (приоритет %s)\n' "${index}" "${package}" "${version_priority}"
+    done
+    printf '  0 - Выход\n'
+    read -r -p "Выберите пакет: " choice || exit 0
+    # Compare the displayed numbers as strings: malformed/huge input is never arithmetic.
+    for index in "${!ordered[@]}"; do
+        if [[ "${choice}" == "$((index + 1))" ]]; then
+            SELECTED_PACKAGE="${ordered[index]}"
             return 0
         fi
-        invalid=1
     done
+    exit 0
 }
 
 configure_selected_package() {
@@ -938,7 +939,7 @@ stop_cluster_checked() {
     local version="$1" name="$2" service status
     service="postgresql@${version}-${name}.service"
     if cluster_online "${version}" "${name}"; then
-        if run_parsec_aware timeout --foreground 60s pg_ctlcluster \
+        if run_parsec_aware timeout --foreground -k 5s 60s pg_ctlcluster \
             --skip-systemctl-redirect "${version}" "${name}" stop; then
             status=0
         else
@@ -946,8 +947,8 @@ stop_cluster_checked() {
         fi
         ((status == 0)) || die "не удалось остановить ${version}/${name}: код=${status}"
     fi
-    run_parsec_aware timeout --foreground 15s systemctl stop "${service}" || true
-    systemctl reset-failed "${service}" >/dev/null 2>&1 || true
+    run_parsec_aware timeout --foreground -k 5s 15s systemctl stop "${service}" || true
+    timeout -k 5s 15s systemctl reset-failed "${service}" >/dev/null 2>&1 || true
     cluster_online "${version}" "${name}" && die "кластер ${version}/${name} остался запущен"
     return 0
 }
@@ -2740,7 +2741,7 @@ backup_menu() {
     pause
 }
 
-remove_cluster_directory_exact() {
+validate_cluster_directory_removal() {
     local path="$1" name="$2" label="$3" expected_path="${4:-}"
     local normalized parent
     normalized="$(realpath -ms -- "${path}")" || die "не удалось нормализовать путь ${path}"
@@ -2750,6 +2751,14 @@ remove_cluster_directory_exact() {
     if [[ -n "${expected_path}" && "${normalized}" != "${expected_path}" ]]; then
         die "неожиданный путь ${label}: ${normalized}, ожидался ${expected_path}"
     fi
+    [[ ! -e "${normalized}" || -d "${normalized}" || -L "${normalized}" ]] || \
+        die "${label} ${normalized} существует, но не является каталогом"
+}
+
+remove_cluster_directory_exact() {
+    local path="$1" name="$2" label="$3" expected_path="${4:-}" normalized
+    validate_cluster_directory_removal "${path}" "${name}" "${label}" "${expected_path}"
+    normalized="$(realpath -ms -- "${path}")" || die "не удалось нормализовать путь ${path}"
 
     if [[ -L "${normalized}" ]]; then
         rm -f -- "${normalized}" || die "не удалось удалить симлинк ${normalized}"
@@ -2760,16 +2769,20 @@ remove_cluster_directory_exact() {
     elif [[ -e "${normalized}" ]]; then
         die "${label} ${normalized} существует, но не является каталогом"
     else
-        printf '%s уже удалён штатной утилитой: %s.\n' "${label}" "${normalized}"
+        printf '%s уже отсутствует: %s.\n' "${label}" "${normalized}"
     fi
     [[ ! -e "${normalized}" && ! -L "${normalized}" ]] || die \
         "после очистки сохранился ${label} ${normalized}"
 }
 
 remove_cluster_service_files() {
-    local version="$1" name="$2" service candidate
+    local version="$1" name="$2" bounded="${3:-no}" service candidate
     service="postgresql@${version}-${name}.service"
-    systemctl disable "${service}" >/dev/null 2>&1 || true
+    # Direct deletion unlinks the exact autostart link below, without calling
+    # systemctl disable (which can itself fail/hang on affected Astra WSL).
+    if [[ "${bounded}" != yes ]]; then
+        systemctl disable "${service}" >/dev/null 2>&1 || true
+    fi
     for candidate in \
         "/etc/systemd/system/${service}" \
         "/etc/systemd/system/multi-user.target.wants/${service}" \
@@ -2779,11 +2792,89 @@ remove_cluster_service_files() {
         "/.postgres/systemd/save/${service}"; do
         rm -f -- "${candidate}"
     done
-    systemctl daemon-reload
+    if [[ "${bounded}" == yes ]]; then
+        timeout -k 5s 15s systemctl daemon-reload || die "не удалось обновить systemd после удаления ${service}"
+    else
+        systemctl daemon-reload
+    fi
+}
+
+# Fail closed before direct deletion: validate the registry, resolved boundaries
+# and mount points. External WAL/tablespaces and symlink targets are not followed.
+validate_cluster_delete_paths() {
+    local version="$1" name="$2" data="$3" conf_dir="$4" rows other_v other_n rest other_data
+    local resolved other_resolved target mounted
+    [[ "${version}" =~ ^[0-9]+([.][0-9]+)?$ && "${name}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]*$ ]] || die "небезопасное имя/версия кластера"
+    validate_cluster_directory_removal "${conf_dir}" "${name}" "Каталог конфигурации" "/etc/postgresql/${version}/${name}"
+    validate_cluster_directory_removal "${data}" "${name}" "Каталог данных"
+    rows="$(pg_lsclusters --no-header)" || die "не удалось проверить реестр перед удалением"
+    [[ "$(awk -v v="${version}" -v n="${name}" '$1==v && $2==n {print $6}' <<<"${rows}")" == "${data}" ]] || \
+        die "регистрация/путь кластера изменились; повторите выбор"
+    resolved="$(realpath -m -- "${data}")" || die "не удалось разрешить каталог данных"
+    while read -r other_v other_n rest; do
+        [[ -n "${other_v}" ]] || continue
+        [[ "${other_v}/${other_n}" != "${version}/${name}" ]] || continue
+        other_data="$(awk '{print $4}' <<<"${rest}")"
+        other_resolved="$(realpath -m -- "${other_data}")" || die "не удалось проверить каталог соседнего кластера"
+        [[ "${resolved}" != "${other_resolved}" && "${resolved}" != "${other_resolved}/"* && "${other_resolved}" != "${resolved}/"* ]] || \
+            die "каталог данных пересекается с кластером ${other_v}/${other_n}; удаление запрещено"
+    done <<<"${rows}"
+    # A nested bind mount can share the same filesystem; --one-file-system alone
+    # is not sufficient. Refuse mounted cluster trees, preserving all their files.
+    mounted="$(findmnt -rn -o TARGET)" || die "не удалось проверить точки монтирования"
+    for target in "${data}" "${conf_dir}"; do
+        [[ ! -L "${target}" ]] || continue
+        resolved="$(realpath -m -- "${target}")" || die "не удалось разрешить ${target}"
+        while IFS= read -r other_resolved; do
+            [[ "${other_resolved}" != "${resolved}" && "${other_resolved}" != "${resolved}/"* ]] || \
+                die "в каталоге кластера есть точка монтирования ${other_resolved}; сначала отключите её"
+        done <<<"${mounted}"
+    done
+}
+
+delete_cluster_checked() {
+    local version="$1" name="$2" owner="$3" data="$4" log="$5" home="$6"
+    local conf_dir="/etc/postgresql/$1/$2" service="postgresql@$1-$2.service" state rc=0 path
+    validate_cluster_delete_paths "${version}" "${name}" "${data}" "${conf_dir}"
+    [[ -f "${data}/PG_VERSION" ]] || die "нет PG_VERSION в ${data}; автоматическое удаление повреждённого/постороннего каталога запрещено"
+    [[ -x "${home}/bin/pg_ctl" ]] || die "не найден pg_ctl для проверки остановки кластера"
+    stop_cluster_checked "${version}" "${name}"
+    # pg_ctl status returns 3 only for a stopped server. All other failures,
+    # including timeout/permission errors, must preserve both data and config.
+    run_parsec_aware timeout -k 5s 15s runuser -u "${owner}" -- "${home}/bin/pg_ctl" -D "${data}" status || rc=$?
+    [[ "${rc}" == 3 ]] || die "не подтверждена остановка ${version}/${name} (pg_ctl status=${rc}); файлы сохранены"
+    state="$(timeout -k 5s 15s systemctl show "${service}" -p ActiveState -p MainPID)" || die "не удалось проверить службу ${service}"
+    grep -qx 'MainPID=0' <<<"${state}" && grep -Eq '^ActiveState=(inactive|failed)$' <<<"${state}" || \
+        die "служба ${service} ещё работает или меняет состояние; файлы сохранены"
+    validate_cluster_delete_paths "${version}" "${name}" "${data}" "${conf_dir}"
+    for path in "${data}/pg_wal" "${data}/pg_xlog" "${data}/pg_tblspc/"*; do
+        [[ ! -L "${path}" ]] || warn "внешние данные по ссылке ${path} сохраняются; при необходимости удалите их отдельно"
+    done
+    remove_cluster_directory_exact "${data}" "${name}" "Каталог данных"
+    remove_cluster_directory_exact "${conf_dir}" "${name}" "Каталог конфигурации" "${conf_dir}"
+    remove_cluster_directory_exact "/etc/systemd/system/${service}.d" "${service}.d" "Дополнения службы" "/etc/systemd/system/${service}.d"
+    path="/etc/syslog-ng/conf.d/mod-astra-postgres-${version}-${name}.conf"
+    if [[ -e "${path}" || -L "${path}" ]]; then
+        rm -f -- "${path}" || die "не удалось удалить ${path}"
+        warn "конфиг syslog-ng выбранного кластера удалён; reload не вызывается во избежание зависания Astra. Изменение применится при следующей штатной перезагрузке конфигурации syslog-ng"
+    fi
+    # A nonstandard setup may share one log across registered clusters.
+    local rows
+    rows="$(pg_lsclusters --no-header)" || die "не удалось проверить соседние журналы; журнал ${log} сохранён"
+    if awk -v p="${log}" -v v="${version}" -v n="${name}" '$7==p && !($1==v && $2==n) {found=1} END {exit !found}' <<<"${rows}"; then
+        warn "журнал ${log} используется другим кластером и сохранён"
+    else
+    case "${log}" in
+        /var/log/postgresql/*-"${version}"-"${name}".log) rm -f -- "${log}" || die "не удалось удалить журнал ${log}" ;;
+        *) warn "нестандартный журнал ${log} сохранён; проверьте его отдельно" ;;
+    esac
+    fi
+    remove_cluster_service_files "${version}" "${name}" yes
+    printf 'Удаление выполнено без pg_dropcluster.\n'
 }
 
 delete_cluster_menu() {
-    local row version name port status owner data log conf_dir
+    local row version name port status owner data log home
     header
     step "Удаление: Выбор кластера"
     select_cluster "Выберите кластер" || return 0
@@ -2803,11 +2894,8 @@ delete_cluster_menu() {
     fi
     printf 'Удаляется только журнал выбранного кластера: %s\n' "${log}"
     printf 'Каталог /var/log/postgresql и журналы других кластеров сохраняются.\n'
-    run_parsec_aware pg_dropcluster --stop "${version}" "${name}"
-    conf_dir="/etc/postgresql/${version}/${name}"
-    remove_cluster_directory_exact "${conf_dir}" "${name}" "Каталог конфигурации" "${conf_dir}"
-    remove_cluster_directory_exact "${data}" "${name}" "Каталог данных"
-    remove_cluster_service_files "${version}" "${name}"
+    home="$(cluster_pg_home "${version}" "${data}")" || die "не удалось определить сервер кластера"
+    delete_cluster_checked "${version}" "${name}" "${owner}" "${data}" "${log}" "${home}"
     printf 'Кластер %s/%s удалён.\n' "${version}" "${name}"
     pause
 }
@@ -3327,7 +3415,7 @@ main_menu() {
         else
             header
         fi
-        step "Выбор действия"
+        step "Выбор действия: <${SELECTED_PACKAGE:-сервер не выбран}>"
         printf '%s\n' \
             '0 - Выход' \
             '1 - Информация: о развернутых кластерах' \
