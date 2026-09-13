@@ -22,7 +22,8 @@ config_source="$(realpath -e -- "$config_source")"
 stage="$(mktemp -d /tmp/pgcc-release.XXXXXX)"
 trap 'rm -rf -- "$stage"' EXIT
 for f in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
-    cp -- "$repo/$f" "$stage/$f"
+    # Git checkouts may contain mode 0644; the builder re-executes itself via fakeroot.
+    install -m 0755 -- "$repo/$f" "$stage/$f"
 done
 cp -- "$repo/LICENSE" "$stage/LICENSE"
 while IFS= read -r -d '' document; do
