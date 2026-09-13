@@ -27,10 +27,10 @@
 #   a stopped cluster and removes exact paths without pg_dropcluster/syslog reload.
 #   Every package installs this builder below /usr/local/share/pg_claster_creator
 #   but intentionally does not create a command symlink for it in /usr/local/bin.
-#   All modes require the explicitly selected validation journal beside the builder
-#   and install it into the same share directory with mode 0644. Missing release
-#   evidence aborts the build. The 2.1.2 journal is historical; it does not
-#   validate the new 2.5.1 features. See TEST.md for the current test scope.
+#   All modes install every regular .md file directly beside the builder into
+#   the same share directory with mode 0644. Subdirectories (including tests)
+#   and symlinks are not traversed. No particular passed journal is required.
+#   Included journal statuses are evidence, not a claim that all tests passed.
 #
 # Package modes accepted by --mode:
 #   1  Install scripts, configuration, documentation, and the command symlink.
@@ -40,6 +40,7 @@
 #   5  Install the files, create a cluster/database, and execute an embedded SQL file.
 #
 # Command-line options:
+#       --config FILE          Select a trusted config; overrides PGCC_CFG.
 #   -h, --help                 Print detailed usage information.
 #   -v, --version              Print the builder version.
 #   -m, --mode MODE            Select package mode 1, 2, 3, 4, or 5.
@@ -66,7 +67,7 @@
 #
 # Arguments and interactive defaults:
 #   Positional arguments are not accepted. PostgreSQL, cluster, role, password,
-#   and backup-directory defaults are loaded first from
+#   and backup-directory defaults, without --config/PGCC_CFG, are loaded from
 #   /usr/local/shared/pg_claster_creator/.new-claster.config, otherwise from
 #   .new-claster.config beside the resolved script. In modes
 #   3 and 4, the interactive dialog lists only the requested hot/cold backups,
@@ -83,8 +84,24 @@
 #   An explicit --package keeps exact behavior.
 #
 # Environment interface:
-#   Build inputs come from CLI options and configuration, not PGCC_* variables.
-#   SQL_FILE and PGCC_SQL_FILE are not environment inputs; use --sql-file.
+#   PGCC_CFG selects a trusted configuration file; --config takes precedence.
+#   Priority: --config > PGCC_CFG > existing per-system config > script-local config.
+#   Relative paths use the invocation directory; empty PGCC_CFG means unset.
+#   Missing, unreadable or non-file explicit configs fail without fallback.
+#   CLI > nonempty ENV > config/defaults; empty ENV values mean unset.
+#   --mode=PGCC_MODE, --pg-family=PGCC_PG_FAMILY, --pg-version=PGCC_PG_VERSION,
+#   --cluster-name=PGCC_CLUSTER_NAME, --port=PGCC_CLUSTER_PORT, --package=PGCC_PACKAGE,
+#   --schema=PGCC_SCHEMA, --user=PGCC_DB_USER, --password=PGCC_DB_PASSWORD,
+#   --data-root=PGCC_DATA_ROOT, --backup-file=PGCC_BACKUP_FILE,
+#   --sql-file=PGCC_SQL_FILE, --backup-dir=PGCC_BACKUP_DIR, --database=PGCC_DATABASE,
+#   --depends=PGCC_DEPENDS (comma-separated), --output-dir=PGCC_OUTPUT_DIR.
+#   --interactive/--non-interactive=PGCC_INTERACTIVE (yes/no),
+#   --force=PGCC_FORCE (yes/no). Boolean ENV also accepts true/false, 1/0, y/n.
+#   Repeated CLI --depends values replace the ENV list, then accumulate together.
+#   Help/version have no ENV aliases. The chosen config
+#   is embedded in the DEB, but its build-host path is not embedded in postinst.
+#   An explicit config path is retained in create-claster-deb-last.sh.
+#   Bare SQL_FILE is not an environment input; use PGCC_SQL_FILE or --sql-file.
 #   The following variables are read by the generated package postinst at
 #   installation time, not as builder options or SQL filename overrides:
 #   CLASTER_FORCE_INSTALL=1     Remove an existing target cluster without a
@@ -104,10 +121,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.5.1"
-# Bump this only when a new functional validation journal is available.
-readonly TEST_JOURNAL_VERSION="2.1.2"
-readonly TEST_JOURNAL_NAME="TEST-${TEST_JOURNAL_VERSION}-journal-passed.md"
+readonly SCRIPT_VERSION="2.5.2"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
 readonly INSTALLED_CONFIG_FILE="/usr/local/shared/pg_claster_creator/.new-claster.config"
@@ -116,7 +130,11 @@ CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
 if [[ -e "${INSTALLED_CONFIG_FILE}" || -L "${INSTALLED_CONFIG_FILE}" ]]; then
     CONFIG_FILE="${INSTALLED_CONFIG_FILE}"
 fi
-readonly CONFIG_FILE
+CONFIG_EXPLICIT=0
+if [[ -n "${PGCC_CFG:-}" ]]; then
+    CONFIG_FILE="${PGCC_CFG}"
+    CONFIG_EXPLICIT=1
+fi
 readonly TMP_DIR="${SCRIPT_DIR}/tmp"
 readonly INSTALL_DIR="/usr/local/share/pg_claster_creator"
 readonly COMMAND_LINK="/usr/local/bin/create-claster.sh"
@@ -136,6 +154,7 @@ INTERACTIVE_MODE="yes"
 MOVE_AFTER_RESTORE="no"
 PREFER_NEWEST_SERVER="no"
 FORCE_BUILD=0
+ENV_OPTIONS_LOADED=0
 BUILD_WORK_DIR=""
 TMP_DIR_CREATED=0
 BUILD_ROOT=""
@@ -190,6 +209,7 @@ usage() {
   5  Установка сценариев, создать кластер, создать БД и выполнить на ней sql
 
 Ключи:
+      --config ФАЙЛ          Предпочтительный конфиг; переопределяет PGCC_CFG
   -h, --help                  Показать эту справку и выйти
   -v, --version               Показать версию и выйти
   -m, --mode РЕЖИМ            Явно выбрать режим сборки 1|2|3|4|5
@@ -215,17 +235,32 @@ usage() {
   -n, --non-interactive       Отключить диалог и требовать параметры в ключах
   -f, --force                 Разрешить замену уже существующего файла пакета
 
-Для всех режимов требуется ${TEST_JOURNAL_NAME} рядом со сборщиком;
-он устанавливается в ${INSTALL_DIR}/ с правами 0644.
+Во всех режимах все обычные файлы .md непосредственно рядом со сборщиком
+устанавливаются в ${INSTALL_DIR}/ с правами 0644.
+Подкаталоги (включая tests) и символьные ссылки не обходятся.
+Наличие конкретного passed-журнала не требуется; статус включённых журналов
+не меняется и не означает успешного прохождения всех тестов.
 
 Значения по умолчанию для PostgreSQL и кластера читаются из
 ${CONFIG_FILE}.
-Приоритет: /usr/local/shared/pg_claster_creator/.new-claster.config;
+Приоритет: --config ФАЙЛ > PGCC_CFG > /usr/local/shared/pg_claster_creator/.new-claster.config;
 при отсутствии — .new-claster.config рядом с разрешённым сценарием.
+Явный путь — абсолютный или относительно текущего каталога; пустой PGCC_CFG не задан.
+Явный файл должен существовать и читаться; fallback при ошибке запрещён.
+Выбранный конфиг включается в DEB, путь машины сборки не переносится в postinst.
+Явный путь сохраняется в create-claster-deb-last.sh. Используйте доверенные конфиги.
 Без --mode сначала выводится интерактивный список режимов. В режимах 2–5
 диалог включён по умолчанию. Для автоматизации используется --non-interactive.
-Интерфейс окружения при сборке: PGCC_* не заменяют ключи сборщика.
-SQL_FILE и PGCC_SQL_FILE не являются входными переменными окружения.
+ENV при сборке (приоритет: CLI > непустая ENV > конфиг/дефолт):
+  --mode: PGCC_MODE; --pg-family: PGCC_PG_FAMILY; --pg-version: PGCC_PG_VERSION
+  --cluster-name: PGCC_CLUSTER_NAME; --port: PGCC_CLUSTER_PORT; --package: PGCC_PACKAGE
+  --schema: PGCC_SCHEMA; --user: PGCC_DB_USER; --password: PGCC_DB_PASSWORD
+  --data-root: PGCC_DATA_ROOT; --backup-file: PGCC_BACKUP_FILE; --sql-file: PGCC_SQL_FILE
+  --backup-dir: PGCC_BACKUP_DIR; --database: PGCC_DATABASE; --output-dir: PGCC_OUTPUT_DIR
+  --depends: PGCC_DEPENDS (через запятую); CLI --depends заменяет ENV-список.
+  --interactive/--non-interactive: PGCC_INTERACTIVE=yes/no; --force: PGCC_FORCE=yes/no.
+Логические ENV также принимают true/false, 1/0, y/n. Пустые ENV не заданы.
+Help/version ENV-аналогов не имеют. Переменная SQL_FILE без префикса не читается.
 SQL задаётся через --sql-file ФАЙЛ или --sql-file=ФАЙЛ только в режиме 5.
 CLASTER_FORCE_INSTALL и CLASTER_FORCE_DB_INSTALL действуют при установке
 готового пакета; они не задают параметры его сборки.
@@ -332,10 +367,19 @@ option_value_required() {
 }
 
 load_defaults() {
-    [[ -r "${CONFIG_FILE}" ]] || die "не найден конфиг ${CONFIG_FILE}"
+    local cli_backup_dir="${BACKUP_DIR}" i
+    local -a cli_names=(pg pg_ver cls_nm cls_pt cls_ch cls_us cls_pw)
+    local -a cli_values=("${pg}" "${pg_ver}" "${cls_nm}" "${cls_pt}" "${cls_ch}" "${cls_us}" "${cls_pw}")
+    local -a cli_set=("${PG_FAMILY_SET}" "${PG_VERSION_SET}" "${CLUSTER_NAME_SET}" "${CLUSTER_PORT_SET}" "${SCHEMA_SET}" "${USER_SET}" "${PASSWORD_SET}")
+    [[ -f "${CONFIG_FILE}" && -r "${CONFIG_FILE}" ]] || die "конфиг отсутствует или недоступен для чтения: ${CONFIG_FILE}"
     # shellcheck disable=SC1090
     source "${CONFIG_FILE}"
-    BACKUP_DIR="${backup_dir:-/.postgres/backup}"
+    # Arguments have already been parsed so --config can select the defaults.
+    # Restore explicit build arguments after sourcing those defaults.
+    for i in "${!cli_names[@]}"; do
+        if ((cli_set[i])); then printf -v "${cli_names[i]}" '%s' "${cli_values[i]}"; fi
+    done
+    BACKUP_DIR="${cli_backup_dir:-${backup_dir:-/.postgres/backup}}"
 }
 
 handle_early_options() {
@@ -346,9 +390,61 @@ handle_early_options() {
     esac
 }
 
+select_config() {
+    # Normalize an explicit path before sudo, cron or a repeat build changes context.
+    # Do not read the file here: privilege escalation may be needed first.
+    if ((CONFIG_EXPLICIT)); then
+        CONFIG_FILE="$(realpath -m -- "${CONFIG_FILE}")" || die "не удалось разрешить путь конфига"
+        export PGCC_CFG="${CONFIG_FILE}"
+    fi
+}
+
+load_environment_options() {
+    ((ENV_OPTIONS_LOADED)) && return 0
+    ENV_OPTIONS_LOADED=1
+    local option variable
+    local -a args=()
+    # Reuse CLI parsing and its explicit-value flags; CLI is parsed afterwards.
+    while read -r option variable; do
+        [[ -z "${!variable:-}" ]] || args+=("$option" "${!variable}")
+    done <<'MAP'
+--mode PGCC_MODE
+--pg-family PGCC_PG_FAMILY
+--pg-version PGCC_PG_VERSION
+--cluster-name PGCC_CLUSTER_NAME
+--port PGCC_CLUSTER_PORT
+--package PGCC_PACKAGE
+--schema PGCC_SCHEMA
+--user PGCC_DB_USER
+--password PGCC_DB_PASSWORD
+--data-root PGCC_DATA_ROOT
+--backup-file PGCC_BACKUP_FILE
+--sql-file PGCC_SQL_FILE
+--backup-dir PGCC_BACKUP_DIR
+--database PGCC_DATABASE
+--depends PGCC_DEPENDS
+--output-dir PGCC_OUTPUT_DIR
+MAP
+    INTERACTIVE_MODE="${PGCC_INTERACTIVE:-yes}"
+    FORCE_BUILD="${PGCC_FORCE:-no}"
+    parse_args "${args[@]}"
+}
+
+normalize_env_flag() {
+    case "${1,,}" in
+        yes|true|1|y) printf yes ;;
+        no|false|0|n) printf no ;;
+        *) die "$2: ожидается yes/no, true/false или 1/0" ;;
+    esac
+}
+
 parse_args() {
+    load_environment_options
+    local depends_seen=0
     while (($#)); do
         case "$1" in
+            --config) option_value_required "$@"; CONFIG_FILE="$2"; CONFIG_EXPLICIT=1; shift 2 ;;
+            --config=*) CONFIG_FILE="${1#*=}"; [[ -n "${CONFIG_FILE}" ]] || die "для ключа --config требуется значение"; CONFIG_EXPLICIT=1; shift ;;
             -h|--help) usage; exit 0 ;;
             -v|--version) version; exit 0 ;;
             -m|--mode) option_value_required "$@"; MODE="$2"; shift 2 ;;
@@ -381,10 +477,12 @@ parse_args() {
             --database=*) DATABASE_NAME="${1#*=}"; DATABASE_SET=1; shift ;;
             --depends)
                 option_value_required "$@"
+                if ((!depends_seen)); then EXTRA_DEPENDENCIES_INPUT=""; depends_seen=1; fi
                 EXTRA_DEPENDENCIES_INPUT+="${EXTRA_DEPENDENCIES_INPUT:+,}$2"
                 shift 2
                 ;;
             --depends=*)
+                if ((!depends_seen)); then EXTRA_DEPENDENCIES_INPUT=""; depends_seen=1; fi
                 EXTRA_DEPENDENCIES_INPUT+="${EXTRA_DEPENDENCIES_INPUT:+,}${1#*=}"
                 shift
                 ;;
@@ -1195,6 +1293,7 @@ write_last_build_script() {
     fi
 
     lines+=("--mode $(printf '%q' "${MODE}")")
+    if ((CONFIG_EXPLICIT)); then lines+=("--config $(printf '%q' "${CONFIG_FILE}")"); fi
     lines+=("--non-interactive")
     if [[ "${MODE}" != 1 ]]; then
         lines+=("--pg-family $(printf '%q' "${pg}")")
@@ -1693,12 +1792,18 @@ install_manual_pages() {
     done
 }
 
+install_markdown_files() {
+    local payload_dir="$1" document
+    # NUL-separated, non-recursive discovery also handles hidden names and spaces.
+    while IFS= read -r -d '' document; do
+        install -m 0644 -- "${document}" "${payload_dir}/${document##*/}"
+    done < <(find "${SCRIPT_DIR}" -maxdepth 1 -type f -name '*.md' -print0)
+}
+
 build_package() {
     local package_base output_file payload_dir dependencies installed_size description
     # Do not inherit a modern host's zstd default: Astra 1.6/1.7 cannot read it.
     local -a build_command=(dpkg-deb -Zgzip --uniform-compression --build)
-    [[ -f "${SCRIPT_DIR}/${TEST_JOURNAL_NAME}" && -r "${SCRIPT_DIR}/${TEST_JOURNAL_NAME}" ]] || \
-        die "не найден журнал успешного тестирования версии ${TEST_JOURNAL_VERSION}: ${SCRIPT_DIR}/${TEST_JOURNAL_NAME}"
     package_base="$(package_basename)"
     mkdir -p -- "${OUTPUT_DIR}"
     OUTPUT_DIR="$(realpath -m -- "${OUTPUT_DIR}")"
@@ -1714,13 +1819,10 @@ build_package() {
     chmod 0755 "${BUILD_ROOT}/DEBIAN"
 
     install -m 0600 -- "${CONFIG_FILE}" "${payload_dir}/.new-claster.config"
-    install -m 0644 -- "${SCRIPT_DIR}/CHANGELOG.md" "${payload_dir}/CHANGELOG.md"
     install -m 0755 -- "${SCRIPT_DIR}/create-claster.sh" "${payload_dir}/create-claster.sh"
     install -m 0755 -- "${SCRIPT_DIR}/create-claster-backup.sh" "${payload_dir}/create-claster-backup.sh"
     install -m 0755 -- "${SCRIPT_DIR}/create-claster-deb.sh" "${payload_dir}/create-claster-deb.sh"
-    install -m 0644 -- "${SCRIPT_DIR}/README.md" "${payload_dir}/README.md"
-    install -m 0644 -- "${SCRIPT_DIR}/TEST.md" "${payload_dir}/TEST.md"
-    install -m 0644 -- "${SCRIPT_DIR}/${TEST_JOURNAL_NAME}" "${payload_dir}/${TEST_JOURNAL_NAME}"
+    install_markdown_files "${payload_dir}"
     ln -s -- "${INSTALL_DIR}/create-claster.sh" "${BUILD_ROOT}${COMMAND_LINK}"
     ln -s -- "${INSTALL_DIR}/create-claster-backup.sh" "${BUILD_ROOT}${BACKUP_COMMAND_LINK}"
     printf '%s\n' "${INSTALL_DIR}/.new-claster.config" >"${BUILD_ROOT}/DEBIAN/conffiles"
@@ -1757,8 +1859,11 @@ build_package() {
 main() {
     local interactive_build=0
     handle_early_options "$@"
-    load_defaults
     parse_args "$@"
+    INTERACTIVE_MODE="$(normalize_env_flag "$INTERACTIVE_MODE" PGCC_INTERACTIVE)"
+    if [[ "$(normalize_env_flag "$FORCE_BUILD" PGCC_FORCE)" == yes ]]; then FORCE_BUILD=1; else FORCE_BUILD=0; fi
+    select_config
+    load_defaults
     if [[ -z "${FAKEROOTKEY:-}" ]] && command -v fakeroot >/dev/null 2>&1; then
         exec fakeroot -- "$0" "$@"
     fi

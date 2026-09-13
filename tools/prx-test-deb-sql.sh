@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Purpose: test SQL-mode selection, packaging and postinst, optionally on an owned raw server.
+# Purpose: test SQL-mode selection, explicit-config packaging and postinst, optionally on an owned raw server.
 # Usage: bash tools/prx-test-deb-sql.sh REPO LOG_DIR [PG_HOME PORT]
 # Args: REPO -- source tree; LOG_DIR -- new evidence directory; optional PG_HOME/PORT
 #   additionally run the generated SQL deployment on a disposable real server.
@@ -19,8 +19,13 @@ cleanup() {
 }
 trap cleanup EXIT
 export QA_SQL_WORK="$work"
-cp "$repo"/create-claster*.sh "$repo"/.new-claster.config "$repo"/README.md "$repo"/TEST.md "$repo"/CHANGELOG.md "$repo"/TEST-2.1.2-journal-passed.md "$work/"
+cp "$repo"/create-claster*.sh "$repo"/.new-claster.config "$work/"
+while IFS= read -r -d '' document; do
+    cp -- "$document" "$work/${document##*/}"
+done < <(find "$repo" -maxdepth 1 -type f -name '*.md' -print0)
 cp -R "$repo/man" "$work/man"
+cp "$work/.new-claster.config" "$work/custom config.cfg"
+printf '\n# Explicit configuration packaging fixture.\n' >>"$work/custom config.cfg"
 sed '/^main "\$@"$/d' "$work/create-claster-deb.sh" >"$work/builder.sh"
 mkdir "$work/backups" "$work/bin"
 printf 'CREATE TABLE qa_sql(id integer); INSERT INTO qa_sql VALUES (42);\n' >"$work/backups/schema file.sql"
@@ -31,6 +36,8 @@ mkdir "$work/backups/directory.sql"
 (
     source "$work/builder.sh"
     trap - EXIT
+    parse_args --config "$work/custom config.cfg"
+    select_config
     MODE=5; pg=tantor-be; pg_ver=18; cls_nm=qa; cls_ch=qa; cls_us=qa; cls_pw=qa
     cls_pt=59435; DATABASE_NAME=qa_db; BACKUP_DIR="$work/backups"; SQL_FILE=""; SERVER_PACKAGE=tantor-be-server-18
     wizard_screen() { :; }
@@ -72,17 +79,35 @@ mkdir "$work/backups/directory.sql"
     write_last_build_script
     grep -F -- '--sql-file' "$work/create-claster-deb-last.sh"
     grep -F -- '--database qa_db' "$work/create-claster-deb-last.sh"
+    grep -F -- "--config $(printf '%q' "$CONFIG_FILE")" "$work/create-claster-deb-last.sh"
     OUTPUT_DIR="$work/out"; build_package
     deb="$OUTPUT_DIR/$(package_basename).deb"
     [[ "$deb" == *-qa-qa_db-sql.deb ]]
     dpkg-deb -x "$deb" "$work/payload"
     dpkg-deb -e "$deb" "$work/control"
+    cmp "$CONFIG_FILE" "$work/payload/usr/local/share/pg_claster_creator/.new-claster.config"
+    ! grep -F -- "$CONFIG_FILE" "$work/control/postinst"
     cmp "$SQL_FILE" "$work/payload/usr/local/share/pg_claster_creator/package-data/install.sql"
     [[ "$(stat -c '%a' "$work/payload/usr/local/share/pg_claster_creator/package-data/install.sql")" == 600 ]]
     bash -n "$work/control/postinst"
     bash "$work/create-claster-deb-last.sh" >"$logs/last.log" 2>&1
     [[ -f "$work/dist/$(package_basename).deb" ]]
-    printf 'PASS selection, filtering, paths, validation, wizard, payload, last.sh\n'
+    dpkg-deb -x "$work/dist/$(package_basename).deb" "$work/repeat-payload"
+    cmp "$CONFIG_FILE" "$work/repeat-payload/usr/local/share/pg_claster_creator/.new-claster.config"
+    printf 'PASS selection, filtering, paths, validation, wizard, explicit config payload, last.sh\n'
+    # Exercise the release helper on this disposable source tree, never REPO/dist.
+    PGCC_CFG="$CONFIG_FILE" bash "$repo/tools/prx-build-release-local.sh" "$work" "$SCRIPT_VERSION" >"$logs/release-config.log" 2>&1
+    printf 'PASS release helper: PGCC_CFG selects distribution config despite system defaults\n'
+    env PGCC_CFG="$CONFIG_FILE" PGCC_MODE=5 PGCC_PG_FAMILY="$pg" PGCC_PG_VERSION="$pg_ver" \
+        PGCC_CLUSTER_NAME="$cls_nm" PGCC_CLUSTER_PORT="$cls_pt" PGCC_PACKAGE="$SERVER_PACKAGE" \
+        PGCC_SCHEMA="$cls_ch" PGCC_DB_USER="$cls_us" PGCC_DB_PASSWORD="$cls_pw" \
+        PGCC_SQL_FILE="$SQL_FILE" PGCC_DATABASE="$DATABASE_NAME" PGCC_INTERACTIVE=no \
+        PGCC_FORCE=yes PGCC_OUTPUT_DIR="$work/env-out" \
+        bash "$work/create-claster-deb.sh" >"$logs/env-build.log" 2>&1
+    dpkg-deb -x "$work/env-out/$(package_basename).deb" "$work/env-payload"
+    cmp "$SQL_FILE" "$work/env-payload/usr/local/share/pg_claster_creator/package-data/install.sql"
+    cmp "$CONFIG_FILE" "$work/env-payload/usr/local/share/pg_claster_creator/.new-claster.config"
+    printf 'PASS mode 5 built from ENV only, SQL/config payload verified\n'
 )
 # Remap only the generated deployment's own paths; all commands below are fixtures.
 payload="$work/payload/usr/local/share/pg_claster_creator"

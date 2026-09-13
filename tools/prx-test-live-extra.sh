@@ -6,8 +6,8 @@
 # Example: see prx-test-live-regression.sh, append extra.
 sql() { runuser -u postgres -- psql --cluster "$v/$1" -X --set=ON_ERROR_STOP=1 --dbname "$2" -Atqc "$3"; }
 query="SELECT count(*), md5(string_agg(id::text || ':' || payload || ':' || qty::text, ',' ORDER BY id)) FROM ONLY pgcc_owner.parent_control"
-hot="$(find "$core_work/backups" -maxdepth 1 -name '*-dmp.tar.gz' -print -quit)"
-cold="$(find "$core_work/backups" -maxdepth 1 -name "$v-$core_c-????????-??????.tar.gz" -print -quit)"
+hot="$(find "$core_backup" -maxdepth 1 -name '*-dmp.tar.gz' -print -quit)"
+cold="$(find "$core_backup" -maxdepth 1 -name "$v-$core_c-????????-??????.tar.gz" -print -quit)"
 [[ -n "$hot" && -n "$cold" ]]
 step EXTRA-SOURCE 0 timeout -k 5 900 "$creator" --action restore --backup-file "$cold" --cluster-name "$c" --port "$port" --backup-dir "$backup"
 baseline="$(sql "$c" "$core_c" "$query")"
@@ -16,9 +16,9 @@ step DUPLICATE-INSTALL nonzero timeout -k 5 120 "$creator" --action install --pa
 step INVALID-PORT nonzero timeout -k 5 60 "$creator" --action port --pg-version "$v" --cluster-name "$c" --port 0
 step MISSING-ARCHIVE nonzero timeout -k 5 60 "$creator" --action restore --backup-file "$backup/missing.tar.gz"
 for invalid in 0 BAD; do
-    step "INVALID-RETENTION-$invalid" nonzero timeout -k 5 60 "$wrapper" "$v" "$c" "$core_c" --backup-dir "$work/rotation" --files-cnt "$invalid"
+    step "INVALID-RETENTION-$invalid" nonzero timeout -k 5 60 "$wrapper" "$v" "$c" "$core_c" --backup-dir "$rotation" --files-cnt "$invalid"
 done
-step BOTH-RETENTION nonzero timeout -k 5 60 "$wrapper" "$v" "$c" "$core_c" --backup-dir "$work/rotation" --files-cnt 2 --files-size 1MiB
+step BOTH-RETENTION nonzero timeout -k 5 60 "$wrapper" "$v" "$c" "$core_c" --backup-dir "$rotation" --files-cnt 2 --files-size 1MiB
 # Access-denied simulation uses /proc: do not fill the host filesystem to provoke ENOSPC.
 step BACKUP-UNWRITABLE nonzero timeout -k 5 60 "$creator" --action backup --pg-version "$v" --cluster-name "$c" --backup-type hot --database "$core_c" --backup-dir /proc/pgcc-test-unwritable
 step DOWN-STOP 0 timeout -k 5 60 pg_ctlcluster --skip-systemctl-redirect "$v" "$c" stop
@@ -53,19 +53,19 @@ step LOGIN-RESTORED 0 env PGPASSWORD=Pgcc-ACL-2.1.1! psql --cluster "$v/$c" -h 1
 roles_query="SELECT rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls FROM pg_roles WHERE rolname LIKE 'pgcc_%' ORDER BY rolname"
 step ROLE-INVENTORY 0 sql "$c" qa_links "$roles_query"
 # Add sentinels to a private rotation directory and verify they survive.
-mkdir "$work/rotation"
-printf sentinel >"$work/rotation/99-otherdb-20000101-000000-dmp.tar.gz"
-printf sentinel >"$work/rotation/keep.txt"
+mkdir "$rotation"
+printf sentinel >"$rotation/99-otherdb-20000101-000000-dmp.tar.gz"
+printf sentinel >"$rotation/keep.txt"
 for n in 1 2 3; do
-    step "COUNT-$n" 0 timeout -k 5 900 "$wrapper" "$v" "$c" "$core_c" --backup-dir "$work/rotation" --files-cnt 2
+    step "COUNT-$n" 0 timeout -k 5 900 "$wrapper" "$v" "$c" "$core_c" --backup-dir "$rotation" --files-cnt 2
     sleep 1
 done
-step COUNT-LIMIT 0 test "$(find "$work/rotation" -name "$v-$core_c-*-dmp.tar.gz" | wc -l)" = 2
-step SENTINEL 0 test "$(cat "$work/rotation/99-otherdb-20000101-000000-dmp.tar.gz")" = sentinel
-step OTHER-FILE 0 test "$(cat "$work/rotation/keep.txt")" = sentinel
-step SIZE-LIMIT 0 timeout -k 5 900 "$wrapper" "$v" "$c" "$core_c" --backup-dir "$work/rotation" --files-size 1B
-step SIZE-COUNT 0 test "$(find "$work/rotation" -name "$v-$core_c-*-dmp.tar.gz" | wc -l)" = 1
-step SIZE-SENTINEL 0 test "$(cat "$work/rotation/99-otherdb-20000101-000000-dmp.tar.gz")" = sentinel
+step COUNT-LIMIT 0 test "$(find "$rotation" -name "$v-$core_c-*-dmp.tar.gz" | wc -l)" = 2
+step SENTINEL 0 test "$(cat "$rotation/99-otherdb-20000101-000000-dmp.tar.gz")" = sentinel
+step OTHER-FILE 0 test "$(cat "$rotation/keep.txt")" = sentinel
+step SIZE-LIMIT 0 timeout -k 5 900 "$wrapper" "$v" "$c" "$core_c" --backup-dir "$rotation" --files-size 1B
+step SIZE-COUNT 0 test "$(find "$rotation" -name "$v-$core_c-*-dmp.tar.gz" | wc -l)" = 1
+step SIZE-SENTINEL 0 test "$(cat "$rotation/99-otherdb-20000101-000000-dmp.tar.gz")" = sentinel
 mkdir "$work/debs"
 for mode in 2 3 4; do
     target="${c}m$mode"

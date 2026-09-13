@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Path note: If /mnt/d/Ai/pg_claster_creator in the example does not match
+# your filesystem, replace it with the actual project path before running.
 # Purpose: verify main/edit menu dispatch without changing clusters.
 # Usage: bash tools/prx-test-edit-menu.sh REPO
 # Args: REPO -- source directory containing create-claster.sh.

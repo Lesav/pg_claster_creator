@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Path note: If /mnt/d/Ai/pg_claster_creator in the example does not match
+# your filesystem, replace it with the actual project path before running.
 # Purpose: test native-like rename, prefix safety, autostart and failure diagnostics.
 # Usage: bash tools/prx-test-cluster-rename.sh REPO
 # Args: REPO -- source directory containing create-claster.sh.

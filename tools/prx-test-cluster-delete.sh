@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Path note: If /mnt/d/Ai/pg_claster_creator in the example does not match
+# your filesystem, replace it with the actual project path before running.
 # Purpose: exercise direct deletion and refusal boundaries with isolated files/services.
 # Usage: bash tools/prx-test-cluster-delete.sh REPO
 # Args: REPO -- project source directory containing create-claster.sh.

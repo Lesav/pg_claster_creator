@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-12" "pg_claster_creator 2.5.1" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-13" "pg_claster_creator 2.5.2" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -118,6 +118,14 @@ and the exact server package recorded in backup metadata, without an
 automatically added contrib package.
 .SH OPTIONS
 .TP
+.BI --config " FILE"
+Select a trusted configuration file, overriding PGCC_CFG; --config=FILE is also accepted.
+Relative paths use the invocation directory. Empty PGCC_CFG means unset.
+Missing, unreadable or non-file explicit configs fail without fallback.
+Without an explicit choice, prefer the existing per-system config, then the script-local file.
+The main script saves only to the selected config; the wrapper retains the choice in sudo/cron.
+The builder embeds the selected config and retains its path in last.sh, not in postinst.
+.TP
 .BR -h , " --help"
 Print complete usage information and exit.
 .TP
@@ -205,11 +213,23 @@ with
 .B --non-interactive
 does not create or change this file. Mode 2, mode 4 and mode 5 commands contain the
 configured database password, so access to the home directory must be restricted.
+.SH BUILD ENVIRONMENT
+CLI > nonempty ENV > configuration/defaults. Empty ENV is unset.
+.nf
+--config: PGCC_CFG; --mode: PGCC_MODE; --pg-family: PGCC_PG_FAMILY;
+--pg-version: PGCC_PG_VERSION; --cluster-name: PGCC_CLUSTER_NAME;
+--port: PGCC_CLUSTER_PORT; --package: PGCC_PACKAGE; --schema: PGCC_SCHEMA;
+--user: PGCC_DB_USER; --password: PGCC_DB_PASSWORD; --data-root: PGCC_DATA_ROOT;
+--backup-file: PGCC_BACKUP_FILE; --sql-file: PGCC_SQL_FILE;
+--backup-dir: PGCC_BACKUP_DIR; --database: PGCC_DATABASE;
+--depends: PGCC_DEPENDS; --output-dir: PGCC_OUTPUT_DIR;
+--interactive/--non-interactive: PGCC_INTERACTIVE=yes/no; --force: PGCC_FORCE=yes/no.
+.fi
+Booleans also accept true/false, 1/0, y/n. PGCC_DEPENDS is comma-separated;
+CLI --depends replaces the ENV list, then repeated CLI values accumulate.
+Bare SQL_FILE is not read. Help/version have no ENV aliases.
 .SH PACKAGE INSTALLATION ENVIRONMENT
-Build inputs use CLI options and configuration, not PGCC_* variables.
-SQL_FILE and PGCC_SQL_FILE are not environment inputs; use --sql-file FILE
-or --sql-file=FILE in mode 5. The flags below apply to package installation,
-not to the builder.
+The flags below apply to package installation, not to the builder.
 .PP
 .TP
 .B CLASTER_FORCE_INSTALL=1
@@ -240,10 +260,11 @@ claster-creator-VERSION-PG-PGVER-CLUSTER-DATABASE.deb
 .fi
 .SH FILES
 .TP
-.I /usr/local/share/pg_claster_creator/TEST-2.1.2-journal-passed.md
-Required validation journal, installed by every package mode with permissions 0644.
-Release 2.3.2 groups rename, port and data-location actions under the Edit menu.
-The bundled 2.1.2 journal is historical and does not validate these new features.
+.I /usr/local/share/pg_claster_creator/*.md
+Every regular .md file directly beside the builder is installed in every mode
+with permissions 0644, including hidden names and spaces. Subdirectories such
+as tests and symlinks are not traversed. No particular passed journal is required.
+Included journal statuses are preserved; inclusion does not imply a passed test.
 .TP
 .I /usr/local/share/pg_claster_creator/create-claster-deb.sh
 Installed builder. No command symlink is created in

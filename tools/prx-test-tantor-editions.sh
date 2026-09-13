@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Path note: If /mnt/d/Ai/pg_claster_creator in the example does not match
+# your filesystem, replace it with the actual project path before running.
 # Purpose: regression-test PostgreSQL package names and Tantor editions without modifying clusters.
 # Usage: bash tools/prx-test-tantor-editions.sh REPO
 # Args: REPO -- project directory containing the three scripts.
@@ -35,8 +37,11 @@ assert() { [[ "$1" == "$2" ]] || { printf 'FAIL: %s != %s\n' "$1" "$2" >&2; exit
         eval "$(declare -f restore_target_conflict | sed "s#/.postgres/#$fixture/.postgres/#g; s#/etc/#$fixture/etc/#g; s#/usr/lib/#$fixture/usr/lib/#g; s#\"/lib/#\"$fixture/lib/#g")"
         cluster_exists() { return 1; }
         pg_lsclusters() { printf '16 demo 5432 down postgres /unused /unused\n'; }
+        # A different major is a different registered cluster, not a name clash.
+        ! restore_target_conflict 18 demo "$fixture/absent-data"
+        pg_lsclusters() { printf '18 demo 5432 down postgres /unused /unused\n'; }
         conflict="$(restore_target_conflict 18 demo "$fixture/absent-data")"
-        [[ "$conflict" == *'уже зарегистрировано'* && "$conflict" == *'16'* ]]
+        [[ "$conflict" == *'уже зарегистрирован'* && "$conflict" == *'18/demo'* ]]
         pg_lsclusters() { return 1; }
         conflict="$(restore_target_conflict 18 demo "$fixture/absent-data")"
         [[ "$conflict" == *'не удалось проверить'* ]]

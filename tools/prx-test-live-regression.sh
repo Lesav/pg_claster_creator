@@ -4,6 +4,9 @@
 # Args: RELEASE -- scripts-only package version; LOG_ROOT -- new per-run evidence directory;
 #   PHASE -- core, extra, ports, ui, tail, extension, extension-r2, cleanup-only or cleanup-ui.
 #   For extension, PGCC_LIVE_EXTENSION names a trusted local sourced test module.
+#   PGCC_LIVE_WORKSPACE=1 uses REPO scripts; PGCC_LIVE_BACKUP_ROOT optionally
+#   stores per-phase archives/rotation beneath ROOT/DISTRO rather than Linux work.
+#   PGCC_LIVE_BUILDER optionally selects an isolated byte-identical builder copy.
 #   Other arguments identify the QA host/server; a failed phase is not a full-plan PASS.
 # Output: per-step logs/results, isolated archives; only owned temporary clusters are deleted.
 #   Full dump/role fingerprints and restored LOGIN are checked on hot/cold/DEB targets.
@@ -40,6 +43,20 @@ fi
 creator=/usr/local/bin/create-claster.sh
 builder=/usr/local/share/pg_claster_creator/create-claster-deb.sh
 wrapper=/usr/local/bin/create-claster-backup.sh
+if [[ "${PGCC_LIVE_WORKSPACE:-0}" == 1 ]]; then
+    creator="$repo/create-claster.sh"; builder="$repo/create-claster-deb.sh"; wrapper="$repo/create-claster-backup.sh"
+fi
+if [[ -n "${PGCC_LIVE_BUILDER:-}" ]]; then
+    cmp "$repo/create-claster-deb.sh" "$PGCC_LIVE_BUILDER" || exit 2
+    builder="$PGCC_LIVE_BUILDER"
+fi
+core_backup="$core_work/backups"
+rotation="$work/rotation"
+if [[ -n "${PGCC_LIVE_BACKUP_ROOT:-}" ]]; then
+    core_backup="$PGCC_LIVE_BACKUP_ROOT/$distro/artifacts/core/backups"
+    backup="$PGCC_LIVE_BACKUP_ROOT/$distro/artifacts/$phase/backups"
+    rotation="$PGCC_LIVE_BACKUP_ROOT/$distro/artifacts/$phase/rotation"
+fi
 db_fingerprint() {
     runuser -u postgres -- pg_dump --cluster "$v/$1" -d "$2" --no-comments | sed '/^\\restrict /d; /^\\unrestrict /d' | sha256sum | awk '{print $1}'
 }
@@ -190,12 +207,12 @@ step COLD-CHECK 0 test "$(sql "${c}cold" "$c" "$query")" = "$baseline"
 step COLD-FULL 0 verify_reference "${c}cold" "$c"
 step COLD-CONFLICT nonzero timeout -k 5 120 "$creator" --action restore --backup-file "$cold" --cluster-name "${c}cold" --port "$((port+1))" --backup-dir "$backup"
 for n in 1 2 3; do
-    step "ROTATION-$n" 0 timeout -k 5 900 "$wrapper" "$v" "$c" "$c" --backup-dir "$work/rotation" --files-cnt 2
+    step "ROTATION-$n" 0 timeout -k 5 900 "$wrapper" "$v" "$c" "$c" --backup-dir "$rotation" --files-cnt 2
     sleep 1
 done
-step ROTATION-COUNT 0 test "$(find "$work/rotation" -name '*-dmp.tar.gz' | wc -l)" = 2
-step ROTATION-SIZE 0 timeout -k 5 900 "$wrapper" "$v" "$c" "$c" --backup-dir "$work/rotation" --files-size 1B
-step ROTATION-MINIMUM 0 test "$(find "$work/rotation" -name '*-dmp.tar.gz' | wc -l)" = 1
+step ROTATION-COUNT 0 test "$(find "$rotation" -name '*-dmp.tar.gz' | wc -l)" = 2
+step ROTATION-SIZE 0 timeout -k 5 900 "$wrapper" "$v" "$c" "$c" --backup-dir "$rotation" --files-size 1B
+step ROTATION-MINIMUM 0 test "$(find "$rotation" -name '*-dmp.tar.gz' | wc -l)" = 1
 mkdir "$work/debs"
 for mode in 2 3 4; do
     args=(--mode "$mode" --non-interactive --pg-family "$family" --pg-version "$v" --package "$package" --cluster-name "${c}m$mode" --port "$((port+mode+1))" --output-dir "$work/debs" --data-root "$data_root")

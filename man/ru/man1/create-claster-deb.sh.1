@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-12" "pg_claster_creator 2.5.1" "Команды разработчика"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-13" "pg_claster_creator 2.5.2" "Команды разработчика"
 .SH ИМЯ
 create-claster-deb.sh \- сборка Debian-пакетов claster-creator
 .SH СИНТАКСИС
@@ -118,6 +118,14 @@ PostgreSQL Pro contrib 18, 17 и далее до заданного миниму
 contrib.
 .SH КЛЮЧИ
 .TP
+.BI --config " ФАЙЛ"
+Выбрать доверенный конфиг с приоритетом над PGCC_CFG; допустима форма --config=ФАЙЛ.
+Относительный путь отсчитывается от текущего каталога. Пустой PGCC_CFG не задан.
+Отсутствующий, нечитаемый явный файл или каталог вместо файла означает ошибку без fallback.
+Без явного выбора приоритет у существующего системного конфига, затем у файла рядом со сценарием.
+Основной сценарий сохраняет только выбранный конфиг; wrapper сохраняет выбор в sudo/cron.
+Сборщик включает выбранный конфиг в DEB и его путь в last.sh, но не путь машины сборки в postinst.
+.TP
 .BR -h , " --help"
 Показать полную справку и завершить работу.
 .TP
@@ -205,11 +213,23 @@ contrib.
 .B --non-interactive
 не создаёт и не изменяет этот файл. В режимах 2, 4 и 5 команда содержит заданный
 пароль БД, поэтому доступ к домашнему каталогу должен быть ограничен.
+.SH ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ПРИ СБОРКЕ
+CLI > непустая ENV > конфиг/дефолт. Пустая ENV не задана.
+.nf
+--config: PGCC_CFG; --mode: PGCC_MODE; --pg-family: PGCC_PG_FAMILY;
+--pg-version: PGCC_PG_VERSION; --cluster-name: PGCC_CLUSTER_NAME;
+--port: PGCC_CLUSTER_PORT; --package: PGCC_PACKAGE; --schema: PGCC_SCHEMA;
+--user: PGCC_DB_USER; --password: PGCC_DB_PASSWORD; --data-root: PGCC_DATA_ROOT;
+--backup-file: PGCC_BACKUP_FILE; --sql-file: PGCC_SQL_FILE;
+--backup-dir: PGCC_BACKUP_DIR; --database: PGCC_DATABASE;
+--depends: PGCC_DEPENDS; --output-dir: PGCC_OUTPUT_DIR;
+--interactive/--non-interactive: PGCC_INTERACTIVE=yes/no; --force: PGCC_FORCE=yes/no.
+.fi
+Логические ENV также принимают true/false, 1/0, y/n. PGCC_DEPENDS задаётся через запятую;
+CLI --depends заменяет ENV-список, повторные CLI-значения суммируются.
+SQL_FILE без префикса не читается. Help/version ENV-аналогов не имеют.
 .SH ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ПРИ УСТАНОВКЕ ПАКЕТА
-Параметры сборки задаются ключами и конфигом, не переменными PGCC_*.
-SQL_FILE и PGCC_SQL_FILE не являются входами окружения; используйте
---sql-file ФАЙЛ или --sql-file=ФАЙЛ в режиме 5. Следующие флаги относятся
-к установке готового пакета, не к сборщику.
+Следующие флаги относятся к установке готового пакета, не к сборщику.
 .PP
 .TP
 .B CLASTER_FORCE_INSTALL=1
@@ -239,10 +259,11 @@ claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-БД.deb
 .fi
 .SH ФАЙЛЫ
 .TP
-.I /usr/local/share/pg_claster_creator/TEST-2.1.2-journal-passed.md
-Обязательный журнал проверки, устанавливаемый во всех режимах с правами 0644.
-Версия 2.3.2 объединяет переименование, переключение порта и перенос данных в меню «Изменить».
-Включённый журнал 2.1.2 является историческим и не подтверждает новые функции.
+.I /usr/local/share/pg_claster_creator/*.md
+Все обычные .md непосредственно рядом со сборщиком устанавливаются во всех
+режимах с правами 0644, включая скрытые имена и пробелы. Подкаталоги (tests)
+и символьные ссылки не обходятся. Конкретный passed-журнал не обязателен.
+Статусы журналов сохраняются; включение файла не означает успешного теста.
 .TP
 .I /usr/local/share/pg_claster_creator/create-claster-deb.sh
 Установленный сборщик. Ссылка команды в

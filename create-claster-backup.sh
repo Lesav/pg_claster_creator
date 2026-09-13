@@ -29,6 +29,7 @@
 #   therefore cleanup happens only after create-claster.sh reports success.
 #
 # Command-line options:
+#       --config FILE          Select a trusted config; overrides PGCC_CFG.
 #   -h, --help              Print detailed usage information and examples.
 #   -v, --version           Print the script version.
 #       --backup-dir DIR    Store backups in DIR; otherwise use the configured
@@ -44,14 +45,24 @@
 #   DATABASE                Existing database name, for example asvd.
 #
 # Environment interface:
-#   No dedicated environment variables replace this wrapper's arguments.
-#   Use VERSION CLUSTER DATABASE and --backup-dir/--files-cnt/--files-size.
+#   PGCC_CFG selects a trusted configuration file; --config takes precedence.
+#   Priority: --config > PGCC_CFG > existing per-system config > script-local config.
+#   Relative paths use the invocation directory; empty PGCC_CFG means unset.
+#   Missing, unreadable or non-file explicit configs fail without fallback.
+#   CLI > nonempty ENV > config/defaults; empty ENV values mean unset.
+#   VERSION CLUSTER DATABASE = PGCC_PG_VERSION PGCC_CLUSTER_NAME PGCC_DATABASE.
+#   All three ENV target fields are required when positional arguments are omitted.
+#   A complete positional CLI target overrides all three ENV fields together.
+#   --backup-dir=PGCC_BACKUP_DIR, --files-cnt=PGCC_FILES_CNT,
+#   --files-size=PGCC_FILES_SIZE, --cron=PGCC_CRON (yes/no, true/false, 1/0, y/n).
+#   PGCC_CRON=yes still opens the interactive scheduling/confirmation dialog.
+#   Help/version have no ENV aliases; other PGCC_* are not wrapper inputs.
 #   The default backup directory comes from the selected configuration file.
-#   PGCC_* belongs to the delegated create-claster.sh interface, not this wrapper.
+#   Explicit config selection is forwarded to the creator, sudo and cron.
 #   SQL files are not accepted: this command creates hot backups only.
 #
 # Exit and safety rules:
-#   Configuration: prefer /usr/local/shared/pg_claster_creator/.new-claster.config;
+#   Without --config/PGCC_CFG, prefer /usr/local/shared/pg_claster_creator/.new-claster.config;
 #   only if absent, read .new-claster.config beside the resolved script.
 #   Help and version do not require privileges. Backup, cleanup, and cron setup
 #   run as root (sudo is used when available). Concurrent runs of the same task
@@ -62,7 +73,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-backup.sh"
-readonly SCRIPT_VERSION="2.5.1"
+readonly SCRIPT_VERSION="2.5.2"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
 readonly INSTALLED_CONFIG_FILE="/usr/local/shared/pg_claster_creator/.new-claster.config"
@@ -71,7 +82,11 @@ CONFIG_FILE="${SCRIPT_DIR}/.new-claster.config"
 if [[ -e "${INSTALLED_CONFIG_FILE}" || -L "${INSTALLED_CONFIG_FILE}" ]]; then
     CONFIG_FILE="${INSTALLED_CONFIG_FILE}"
 fi
-readonly CONFIG_FILE
+CONFIG_EXPLICIT=0
+if [[ -n "${PGCC_CFG:-}" ]]; then
+    CONFIG_FILE="${PGCC_CFG}"
+    CONFIG_EXPLICIT=1
+fi
 readonly DEFAULT_BACKUP_DIR="/.postgres/backup"
 
 BACKUP_DIR=""
@@ -79,6 +94,7 @@ FILES_COUNT=""
 FILES_SIZE=""
 FILES_SIZE_BYTES=""
 CREATE_CRON=0
+ENV_OPTIONS_LOADED=0
 CRON_TEMP_FILE=""
 declare -a POSITIONAL_ARGS=()
 declare -a TASK_BACKUPS=()
@@ -91,6 +107,7 @@ usage() {
 Создаёт горячий бэкап БД через неинтерактивный режим create-claster.sh.
 
 Ключи:
+      --config ФАЙЛ      Предпочтительный конфиг; переопределяет PGCC_CFG
   -h, --help              Показать эту справку
   -v, --version           Показать версию сценария
       --backup-dir ПУТЬ   Каталог бэкапов; по умолчанию значение backup_dir
@@ -112,12 +129,19 @@ usage() {
 передан ключом, сценарий также предложит выбрать ограничение количества или
 общего размера файлов.
 
-Конфиг: /usr/local/shared/pg_claster_creator/.new-claster.config;
+Конфиг: --config ФАЙЛ > PGCC_CFG > /usr/local/shared/pg_claster_creator/.new-claster.config;
 при отсутствии — .new-claster.config рядом с разрешённым сценарием.
+Явный путь — абсолютный или относительно текущего каталога; пустой PGCC_CFG не задан.
+Явный файл должен существовать и читаться; fallback при ошибке запрещён.
+Выбор передаётся create-claster.sh и сохраняется в cron. Используйте доверенные файлы.
 
-Переменные окружения: собственных аналогов аргументов у wrapper нет.
-Версию, кластер, БД и параметры хранения передавайте аргументами;
-PGCC_* — интерфейс основного create-claster.sh, не замена аргументов wrapper.
+ENV: CLI > непустая ENV > конфиг/дефолт. Пустые ENV считаются незаданными.
+Без позиционных аргументов задайте все три: PGCC_PG_VERSION, PGCC_CLUSTER_NAME,
+PGCC_DATABASE. Полная позиционная CLI-цель заменяет ENV-цель целиком.
+--backup-dir: PGCC_BACKUP_DIR; --files-cnt: PGCC_FILES_CNT;
+--files-size: PGCC_FILES_SIZE; --cron: PGCC_CRON=yes/no (также true/false, 1/0, y/n).
+PGCC_CRON=yes по-прежнему требует диалога настройки и подтверждения cron.
+Help/version ENV-аналогов не имеют. Ограничения количества и размера несовместимы.
 SQL-файлы и --sql-file не поддерживаются: сценарий создаёт горячие бэкапы.
 
 Примеры:
@@ -155,9 +179,27 @@ option_value_required() {
     (($# >= 2)) && [[ -n "$2" ]] || die "для ключа $1 требуется значение"
 }
 
+select_config() {
+    # Normalize an explicit path before sudo, cron or a repeat build changes context.
+    # Do not read the file here: privilege escalation may be needed first.
+    if ((CONFIG_EXPLICIT)); then
+        CONFIG_FILE="$(realpath -m -- "${CONFIG_FILE}")" || die "не удалось разрешить путь конфига"
+        export PGCC_CFG="${CONFIG_FILE}"
+    fi
+}
+
 parse_args() {
+    if ((!ENV_OPTIONS_LOADED)); then
+        ENV_OPTIONS_LOADED=1
+        BACKUP_DIR="${PGCC_BACKUP_DIR:-}"
+        FILES_COUNT="${PGCC_FILES_CNT:-}"
+        FILES_SIZE="${PGCC_FILES_SIZE:-}"
+        CREATE_CRON="${PGCC_CRON:-no}"
+    fi
     while (($#)); do
         case "$1" in
+            --config) option_value_required "$@"; CONFIG_FILE="$2"; CONFIG_EXPLICIT=1; shift 2 ;;
+            --config=*) CONFIG_FILE="${1#*=}"; [[ -n "${CONFIG_FILE}" ]] || die "для ключа --config требуется значение"; CONFIG_EXPLICIT=1; shift ;;
             -h|--help) usage; exit 0 ;;
             -v|--version) version; exit 0 ;;
             --backup-dir) option_value_required "$@"; BACKUP_DIR="$2"; shift 2 ;;
@@ -172,6 +214,18 @@ parse_args() {
             *) POSITIONAL_ARGS+=("$1"); shift ;;
         esac
     done
+    case "${CREATE_CRON,,}" in
+        yes|true|1|y) CREATE_CRON=1 ;;
+        no|false|0|n) CREATE_CRON=0 ;;
+        *) die "PGCC_CRON: ожидается yes/no, true/false или 1/0" ;;
+    esac
+    # Positional CLI arguments form one complete target and override ENV together.
+    if ((${#POSITIONAL_ARGS[@]} == 0)) &&
+        [[ -n "${PGCC_PG_VERSION:-}${PGCC_CLUSTER_NAME:-}${PGCC_DATABASE:-}" ]]; then
+        [[ -n "${PGCC_PG_VERSION:-}" && -n "${PGCC_CLUSTER_NAME:-}" && -n "${PGCC_DATABASE:-}" ]] ||
+            die "для ENV-цели задайте PGCC_PG_VERSION, PGCC_CLUSTER_NAME и PGCC_DATABASE"
+        POSITIONAL_ARGS=("$PGCC_PG_VERSION" "$PGCC_CLUSTER_NAME" "$PGCC_DATABASE")
+    fi
 }
 
 validate_pg_version() {
@@ -208,7 +262,8 @@ size_to_bytes() {
 }
 
 configured_backup_dir() {
-    if [[ "${CONFIG_FILE}" == "${INSTALLED_CONFIG_FILE}" && ! -r "${CONFIG_FILE}" ]]; then
+    if { ((CONFIG_EXPLICIT)) || [[ "${CONFIG_FILE}" == "${INSTALLED_CONFIG_FILE}" ]]; } &&
+       [[ ! -f "${CONFIG_FILE}" || ! -r "${CONFIG_FILE}" ]]; then
         die "приоритетный конфиг недоступен для чтения: ${CONFIG_FILE}"
     fi
     if [[ -r "${CONFIG_FILE}" ]]; then
@@ -234,14 +289,19 @@ resolve_creator() {
 }
 
 require_root() {
+    local variable
+    local -a config_env=(env)
+    for variable in PGCC_CFG PGCC_PG_VERSION PGCC_CLUSTER_NAME PGCC_DATABASE PGCC_BACKUP_DIR PGCC_FILES_CNT PGCC_FILES_SIZE PGCC_CRON; do
+        [[ ! -v "$variable" ]] || config_env+=("$variable=${!variable}")
+    done
     if ((EUID == 0)); then
         return 0
     fi
     command -v sudo >/dev/null 2>&1 || die "требуются права root; sudo не найден"
     if [[ ! -t 0 || ! -t 2 ]]; then
-        exec sudo -n -- "$0" "$@"
+        exec sudo -n -- "${config_env[@]}" "$0" "$@"
     fi
-    exec sudo -- "$0" "$@"
+    exec sudo -- "${config_env[@]}" "$0" "$@"
 }
 
 load_task_backups() {
@@ -376,6 +436,7 @@ install_cron_task() {
         runner="${SCRIPT_DIR}/${SCRIPT_NAME}"
     fi
     command="$(shell_quote "${runner}") $(shell_quote "${version}") $(shell_quote "${cluster}") $(shell_quote "${database}") --backup-dir $(shell_quote "${backup_dir}")"
+    if ((CONFIG_EXPLICIT)); then command+=" --config $(shell_quote "${CONFIG_FILE}")"; fi
     if [[ -n "${FILES_COUNT}" ]]; then
         command+=" --files-cnt $(shell_quote "${FILES_COUNT}")"
     else
@@ -411,6 +472,7 @@ acquire_task_lock() {
 main() {
     local version_value cluster database creator archive_version cluster_data
     parse_args "$@"
+    select_config
     ((${#POSITIONAL_ARGS[@]} == 3)) || { usage >&2; die "требуются аргументы <версия> <кластер> <имя БД>"; }
     version_value="${POSITIONAL_ARGS[0]}"
     cluster="${POSITIONAL_ARGS[1]}"
@@ -429,10 +491,13 @@ main() {
         FILES_SIZE_BYTES="$(size_to_bytes "${FILES_SIZE}")" || die \
             "некорректный --files-size: ${FILES_SIZE}"
     fi
+    require_root "$@"
+    if ((CONFIG_EXPLICIT)); then
+        [[ -f "${CONFIG_FILE}" && -r "${CONFIG_FILE}" ]] || die "конфиг отсутствует или недоступен для чтения: ${CONFIG_FILE}"
+    fi
     [[ -n "${BACKUP_DIR}" ]] || BACKUP_DIR="$(configured_backup_dir)"
     [[ "${BACKUP_DIR}" == /* && "${BACKUP_DIR}" != / ]] || die \
         "каталог бэкапов должен быть абсолютным и не корневым: ${BACKUP_DIR}"
-    require_root "$@"
     if ((CREATE_CRON)); then
         install_cron_task "${version_value}" "${cluster}" "${database}" "${BACKUP_DIR}"
         return 0
@@ -441,7 +506,9 @@ main() {
     # Delegate edition detection (including Tantor SE/BE) to the existing cluster.
     # Never pass a preferred package: cron must not replace BE with SE.
     creator="$(resolve_creator)" || die "не найден create-claster.sh"
-    "${creator}" --action backup "${version_value}" "${cluster}" \
+    local -a config_args=()
+    if ((CONFIG_EXPLICIT)); then config_args=(--config "${CONFIG_FILE}"); fi
+    "${creator}" "${config_args[@]}" --action backup "${version_value}" "${cluster}" \
         --backup-type hot --database "${database}" --backup-dir "${BACKUP_DIR}"
     # Archive names use the physical major, while cron still addresses the
     # registered cluster. Resolve it before applying version-scoped retention.

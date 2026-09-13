@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-12" "pg_claster_creator 2.5.1" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-13" "pg_claster_creator 2.5.2" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -55,7 +55,7 @@ visible until Enter. Use trusted self-contained SQL; errors may leave partial
 changes. SHOW server_version; is a harmless test. No SQL CLI action is added.
 .PP
 Edit item 1 renames a cluster using pg_renamecluster after validating
-the new name across all major versions and stopping the source cluster.
+the new name within the same major version and stopping the source cluster.
 Project paths and units are updated; port, running state and boot enablement
 are preserved. Database/role names and external cron jobs are not renamed.
 Configuration and unit copies are retained in /var/tmp/pgcc-rename.* (not database data).
@@ -108,6 +108,14 @@ Delete a cluster. Interactive mode can also delete one database. Before
 deletion, the menu always offers a cold cluster backup or a hot backup of the
 selected database. Declining a backup requires separate confirmation.
 .SH OPTIONS
+.TP
+.BI --config " FILE"
+Select a trusted configuration file, overriding PGCC_CFG; --config=FILE is also accepted.
+Relative paths use the invocation directory. Empty PGCC_CFG means unset.
+Missing, unreadable or non-file explicit configs fail without fallback.
+Without an explicit choice, prefer the existing per-system config, then the script-local file.
+The main script saves only to the selected config; the wrapper retains the choice in sudo/cron.
+The builder embeds the selected config and retains its path in last.sh, not in postinst.
 .TP
 .BR -h , " --help"
 Print complete usage information and exit.

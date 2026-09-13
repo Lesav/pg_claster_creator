@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Purpose: test interactive start/stop menus without touching real clusters.
+# Path note: If /mnt/d/Ai/pg_claster_creator in the example does not match
+# your filesystem, replace it with the actual project path before running.
+# Purpose: test start/stop menus and stop notifications without touching real clusters.
 # Usage: bash tools/prx-test-cluster-power.sh REPO
 # Args: REPO -- directory containing create-claster.sh.
 # Output: PASS for state, selection, confirmation, cancellation and race handling.
@@ -9,6 +11,7 @@ repo="$(realpath "$1")"
 fixture="$(mktemp -d /tmp/pgcc-power-test.XXXXXX)"
 trap 'rm -rf -- "$fixture"' EXIT
 source "$repo/create-claster.sh"
+real_stop_function="$(declare -f stop_cluster_checked)"
 # Sourcing the product installs its EXIT trap; restore ownership of this fixture.
 trap 'rm -rf -- "$fixture"' EXIT
 NON_INTERACTIVE=0
@@ -51,3 +54,29 @@ rm -- "$fixture/fail"
 [[ "$(wc -l <"$fixture/events")" == 2 ]]
 bash -n "$repo/create-claster.sh"
 printf 'PASS: start/stop, name/index, y/N default, cancellation, ambiguous name, listing failure, state race\n'
+(
+    eval "$real_stop_function"
+    NON_INTERACTIVE=1
+    cluster_online() { [[ "$(<"$fixture/state")" == online ]]; }
+    run_parsec_aware() { printf 'STOP COMMAND\n' >&2; printf down >"$fixture/state"; }
+    timeout() { :; }
+    for initial in online down; do
+        printf '%s' "$initial" >"$fixture/state"
+        stop_cluster_checked 18 demo </dev/null >"$fixture/stop-stdout" 2>"$fixture/stop-stderr"
+        [[ ! -s "$fixture/stop-stdout" ]]
+        [[ "$(head -n 1 "$fixture/stop-stderr")" == 'Будет остановлен кластер 18/demo.' ]]
+        grep -q '^STOP COMMAND$' "$fixture/stop-stderr"
+    done
+    vendor_service_name() { echo vendor-fixture.service; }
+    timeout() {
+        case "$3" in
+            is-active) echo active ;;
+            is-enabled) echo disabled ;;
+            stop) grep -q '^Будет остановлена штатная служба PostgreSQL: vendor-fixture.service.$' "$fixture/vendor-stderr"; touch "$fixture/vendor-stopped" ;;
+            *) return 1 ;;
+        esac
+    }
+    stop_disable_vendor_service fixture </dev/null >"$fixture/vendor-stdout" 2>"$fixture/vendor-stderr"
+    [[ ! -s "$fixture/vendor-stdout" && -f "$fixture/vendor-stopped" ]]
+)
+printf 'PASS: cluster/vendor stop announced before commands, stderr only, no stdin required\n'

@@ -20,6 +20,8 @@
 #   Server package selection exits on 0, invalid/empty input or EOF without retrying.
 #   Cluster deletion stops and verifies the server, then removes exact cluster
 #   paths without pg_dropcluster or its potentially blocking syslog-ng reload.
+#   Cluster and vendor-service stop requests are announced on stderr before
+#   execution, including unattended and cleanup calls, without extra prompts.
 #   Displayed database and data-directory sizes use an aligned field of at most
 #   nine characters, including a space and a two-letter binary size unit.
 #   Every newly created backup contains a commented, shell-safe command that
@@ -48,6 +50,7 @@
 #   Database/role names and external cron jobs are not renamed.
 #
 # Command-line options:
+#       --config FILE          Select a trusted config; overrides PGCC_CFG.
 #   -h, --help                         Print detailed usage information.
 #   -v, --version                      Print the script version.
 #   -a, --action ACTION                Select a non-interactive action.
@@ -75,6 +78,13 @@
 #     create-claster.sh --action delete 16 subsys --backup-before-delete no
 #
 # Environment interface:
+#   Functional CLI options have ENV equivalents listed below; CLI wins over ENV.
+#   Supported ENV inputs survive the script's own sudo re-execution.
+#   Help/version have no ENV aliases. Start/stop, rename and SQL remain menu-only.
+#   PGCC_CFG selects a trusted configuration file; --config takes precedence.
+#   Priority: --config > PGCC_CFG > existing per-system config > script-local config.
+#   Relative paths use the invocation directory; empty PGCC_CFG means unset.
+#   Missing, unreadable or non-file explicit configs fail without fallback.
 #   PGCC_ACTION, PGCC_PACKAGE, PGCC_PG_FAMILY, PGCC_PG_VERSION,
 #   PGCC_CLUSTER_NAME, PGCC_CLUSTER_PORT, PGCC_SCHEMA, PGCC_DB_USER,
 #   PGCC_DB_PASSWORD, PGCC_DATA_ROOT, PGCC_BACKUP_DIR, PGCC_BACKUP_FILE,
@@ -85,9 +95,10 @@
 #   There is no PGCC_SQL_FILE input. Select the SQL file in the Edit menu.
 #
 # Configuration:
-#   Defaults are loaded from /usr/local/shared/pg_claster_creator/.new-claster.config
-#   when it exists; otherwise .new-claster.config beside the resolved script is
-#   used. Saves update the selected file, never both. An unreadable preferred
+#   Without --config/PGCC_CFG, prefer the existing per-system file
+#   /usr/local/shared/pg_claster_creator/.new-claster.config, otherwise use
+#   .new-claster.config beside the resolved script. Saves update only the selected
+#   file. Explicit selection is retained across sudo. An unreadable preferred
 #   file is an error, not a reason to fall back to the project configuration.
 #   Command-line arguments override environment variables, and environment
 #   variables override configuration defaults. Run --help for complete examples.
@@ -95,7 +106,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.5.1"
+readonly SCRIPT_VERSION="2.5.2"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -105,7 +116,11 @@ CONFIG_FILE="${LOCAL_CONFIG_FILE}"
 if [[ -e "${INSTALLED_CONFIG_FILE}" || -L "${INSTALLED_CONFIG_FILE}" ]]; then
     CONFIG_FILE="${INSTALLED_CONFIG_FILE}"
 fi
-readonly CONFIG_FILE
+CONFIG_EXPLICIT=0
+if [[ -n "${PGCC_CFG:-}" ]]; then
+    CONFIG_FILE="${PGCC_CFG}"
+    CONFIG_EXPLICIT=1
+fi
 readonly SEPARATOR="-------------------------------------------------------------------------------"
 
 declare SELECTED_PACKAGE=""
@@ -209,10 +224,15 @@ SQL доступен только через меню: --action sql и --sql-fil
 Размеры БД и каталогов данных показываются в выровненном поле шириной девять
 символов: две цифры после точки, пробел и двухбуквенная единица измерения.
 
-Конфиг: сначала /usr/local/shared/pg_claster_creator/.new-claster.config,
+Конфиг: --config ФАЙЛ > PGCC_CFG > /usr/local/shared/pg_claster_creator/.new-claster.config,
 при отсутствии — .new-claster.config рядом с разрешённым сценарием.
+Явный путь — абсолютный или относительно текущего каталога; пустой PGCC_CFG не задан.
+Явный файл должен существовать и читаться; fallback при ошибке запрещён.
+Сохраняется только выбранный конфиг. Используйте доверенные файлы.
+Одноимённые кластеры разных major допустимы; пути, службы и порты проверяются отдельно.
 
 Общие ключи:
+      --config ФАЙЛ                  Предпочтительный конфиг; переопределяет PGCC_CFG
   -h, --help                         Показать эту справку и выйти
   -v, --version                      Показать версию сценария и выйти
   -a, --action ДЕЙСТВИЕ              info|install|port|move-data|backup|restore|delete
@@ -243,6 +263,7 @@ SQL доступен только через меню: --action sql и --sql-fil
 без изменения прав вложенных лог-файлов; ошибка установки прав запрещает запуск.
 
 Переменные окружения:
+  PGCC_CFG — путь к предпочтительному конфигу (ниже приоритетом, чем --config).
   PGCC_ACTION, PGCC_PACKAGE, PGCC_PG_FAMILY, PGCC_PG_VERSION,
   PGCC_CLUSTER_NAME, PGCC_CLUSTER_PORT, PGCC_SCHEMA, PGCC_DB_USER,
   PGCC_DB_PASSWORD, PGCC_DATA_ROOT, PGCC_BACKUP_DIR, PGCC_BACKUP_FILE,
@@ -290,9 +311,20 @@ option_value_required() {
     (($# >= 2)) && [[ -n "$2" ]] || die "для ключа $1 требуется значение"
 }
 
+select_config() {
+    # Normalize an explicit path before sudo, cron or a repeat build changes context.
+    # Do not read the file here: privilege escalation may be needed first.
+    if ((CONFIG_EXPLICIT)); then
+        CONFIG_FILE="$(realpath -m -- "${CONFIG_FILE}")" || die "не удалось разрешить путь конфига"
+        export PGCC_CFG="${CONFIG_FILE}"
+    fi
+}
+
 parse_args() {
     while (($#)); do
         case "$1" in
+            --config) option_value_required "$@"; CONFIG_FILE="$2"; CONFIG_EXPLICIT=1; shift 2 ;;
+            --config=*) CONFIG_FILE="${1#*=}"; [[ -n "${CONFIG_FILE}" ]] || die "для ключа --config требуется значение"; CONFIG_EXPLICIT=1; shift ;;
             -h|--help) SHOW_HELP=1; shift ;;
             -v|--version) SHOW_VERSION=1; shift ;;
             -a|--action) option_value_required "$@"; ARG_ACTION="$2"; shift 2 ;;
@@ -507,16 +539,25 @@ confirm() {
 
 require_root() {
     if (( EUID != 0 )); then
+        local variable
+        local -a config_env=(env)
+        # Forward only the documented interface when sudo filters the environment.
+        for variable in PGCC_CFG PGCC_ACTION PGCC_PACKAGE PGCC_PG_FAMILY PGCC_PG_VERSION \
+            PGCC_CLUSTER_NAME PGCC_CLUSTER_PORT PGCC_SCHEMA PGCC_DB_USER PGCC_DB_PASSWORD \
+            PGCC_DATA_ROOT PGCC_BACKUP_DIR PGCC_BACKUP_FILE PGCC_BACKUP_TYPE PGCC_DATABASE \
+            PGCC_BACKUP_BEFORE_DELETE PGCC_CLEAR_WAL PGCC_OVERWRITE; do
+            [[ ! -v "$variable" ]] || config_env+=("$variable=${!variable}")
+        done
         command -v sudo >/dev/null 2>&1 || die "сценарий нужно запускать от root"
         if [[ ! -t 0 || ! -t 2 || -n "${ARG_ACTION:-${PGCC_ACTION:-}}" ]]; then
-            exec sudo -n -- bash "${BASH_SOURCE[0]}" "$@"
+            exec sudo -n -- "${config_env[@]}" bash "${BASH_SOURCE[0]}" "$@"
         fi
-        exec sudo -- bash "${BASH_SOURCE[0]}" "$@"
+        exec sudo -- "${config_env[@]}" bash "${BASH_SOURCE[0]}" "$@"
     fi
 }
 
 load_config() {
-    [[ -r "${CONFIG_FILE}" ]] || die \
+    [[ -f "${CONFIG_FILE}" && -r "${CONFIG_FILE}" ]] || die \
         "выбранный конфиг отсутствует или недоступен для чтения: ${CONFIG_FILE}"
     chmod 600 "${CONFIG_FILE}" 2>/dev/null || true
     # shellcheck source=/dev/null
@@ -767,10 +808,12 @@ stop_disable_vendor_service() {
     local unit output state
     unit="$(vendor_service_name "$1")" || return 0
     state="$(timeout 15s systemctl is-active "${unit}" 2>/dev/null || true)"
-    if [[ "${state}" != inactive && "${state}" != failed ]] && \
-        ! output="$(timeout 30s systemctl stop "${unit}" 2>&1)"; then
-        [[ -n "${output}" ]] && printf '%s\n' "${output}" >&2
-        die "не удалось остановить службу ${unit}"
+    if [[ "${state}" != inactive && "${state}" != failed ]]; then
+        printf 'Будет остановлена штатная служба PostgreSQL: %s.\n' "${unit}" >&2
+        if ! output="$(timeout 30s systemctl stop "${unit}" 2>&1)"; then
+            [[ -n "${output}" ]] && printf '%s\n' "${output}" >&2
+            die "не удалось остановить службу ${unit}"
+        fi
     fi
     state="$(timeout 15s systemctl is-enabled "${unit}" 2>/dev/null || true)"
     # Avoid redundant SysV synchronization on older Astra/WSL systemd.
@@ -987,6 +1030,9 @@ start_cluster_checked() {
 stop_cluster_checked() {
     local version="$1" name="$2" service status
     service="postgresql@${version}-${name}.service"
+    # Announce every stop request, including cleanup and non-interactive calls.
+    # Keep diagnostics off stdout and never add an unattended input prompt here.
+    printf 'Будет остановлен кластер %s/%s.\n' "${version}" "${name}" >&2
     if cluster_online "${version}" "${name}"; then
         if run_parsec_aware timeout --foreground -k 5s 60s pg_ctlcluster \
             --skip-systemctl-redirect "${version}" "${name}" stop; then
@@ -1261,9 +1307,9 @@ restore_target_conflict() {
         printf 'не удалось проверить зарегистрированные кластеры'
         return 0
     }
-    existing_version="$(awk -v n="${name}" '$2 == n {print $1}' <<<"${rows}")"
+    existing_version="$(awk -v v="${version}" -v n="${name}" '$1 == v && $2 == n {print $1}' <<<"${rows}")"
     if [[ -n "${existing_version}" ]]; then
-        printf 'имя кластера %s уже зарегистрировано (PostgreSQL %s); выберите другое имя независимо от версии' "${name}" "${existing_version//$'\n'/, }"
+        printf 'кластер %s/%s уже зарегистрирован; выберите другое имя для этой версии PostgreSQL' "${version}" "${name}"
         return 0
     fi
     if [[ "${policy}" == rename ]]; then
@@ -1522,7 +1568,11 @@ change_port_menu() {
         done
         printf '\nКластер %s/%s: порт %s -> %s.\n' \
             "${version}" "${name}" "${old_port}" "${new_port}"
-        confirm "Переключить порт выбранного кластера?" Y || return 0
+        if [[ "${status}" == online* ]]; then
+            confirm "Будет остановлен кластер при переключении порта. Продолжить?" Y || return 0
+        else
+            confirm "Переключить порт выбранного кластера?" Y || return 0
+        fi
     fi
 
     [[ "${new_port}" =~ ^[0-9]+$ ]] && ((new_port >= 1 && new_port <= 65535)) || \
@@ -1535,7 +1585,6 @@ change_port_menu() {
 
     [[ "${status}" == online* ]] && was_online=yes
     if [[ "${was_online}" == yes ]]; then
-        printf 'Остановка кластера %s/%s...\n' "${version}" "${name}"
         stop_cluster_checked "${version}" "${name}"
     fi
     set_cluster_port "${version}" "${name}" "${data}" "${new_port}"
@@ -1700,8 +1749,8 @@ rename_cluster_checked() (
     new_data="$(renamed_cluster_path "${data}" "${name}" "${new_name}")" || die "не удалось определить новый путь данных"
     [[ "${data}" == /* && "${data}" != / && -d "${data}" && ! -L "${data}" ]] || die "небезопасный исходный каталог данных"
     [[ -d "${new_data%/*}" ]] || die "родительский каталог нового пути не существует: ${new_data%/*}"
-    # Name conflicts are global. An unchanged custom data directory belongs to
-    # this source cluster and is not a destination collision.
+    # Name conflicts are scoped to the PostgreSQL major. An unchanged custom
+    # data directory belongs to this source cluster, not a foreign target.
     if [[ "${new_data}" == "${data}" ]]; then
         conflict="$(restore_target_conflict "${version}" "${new_name}" "/etc/postgresql/${version}/${new_name}" rename)" && die "${conflict}"
     else
@@ -2886,7 +2935,7 @@ backup_menu() {
         else
             warn "создание бэкапа отменено"
         fi
-    elif confirm "Создать холодный бэкап выбранного кластера?" Y; then
+    elif confirm "Будет остановлен кластер при создании холодного бэкапа. Продолжить?" Y; then
         make_cold_backup "${version}" "${name}" "${port}" "${status}" "${owner}" "${data}" "${log}" yes
     else
         warn "создание бэкапа отменено"
@@ -3033,9 +3082,9 @@ delete_cluster_menu() {
         make_cold_backup "${version}" "${name}" "${port}" "${status}" "${owner}" "${data}" "${log}" no
     elif ((NON_INTERACTIVE)); then
         printf 'Удаление выполняется без резервной копии по заданным параметрам.\n'
-    elif confirm "Сделать холодный бэкап перед удалением?" Y; then
+    elif confirm "Будет остановлен кластер. Сделать холодный бэкап перед удалением?" Y; then
         make_cold_backup "${version}" "${name}" "${port}" "${status}" "${owner}" "${data}" "${log}" no
-    elif ! confirm "Удалить кластер БЕЗ резервной копии?" N; then
+    elif ! confirm "Будет остановлен кластер. Удалить кластер БЕЗ резервной копии?" N; then
         warn "удаление отменено"
         pause
         return 0
@@ -3725,6 +3774,7 @@ main() {
         version
         exit 0
     fi
+    select_config
     require_root "$@"
     load_config
     apply_runtime_options

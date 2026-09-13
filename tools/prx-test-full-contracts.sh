@@ -155,4 +155,93 @@ check MAIN-UNKNOWN-ACTION nonzero main_bad --action invalid
 for option in --action --package --pg-version --cluster-name --port --schema --user --password --data-root --backup-dir --backup-file --backup-type --database --overwrite; do
     check "MAIN-MISSING-${option#--}" nonzero main_bad "$option"
 done
+env_value() {
+    local script="$1" option="$2" variable="$3" field="$4" value="$5"
+    source "$script"; trap - EXIT
+    printf -v "$variable" '%s' "$value"
+    parse_args
+    [[ "${!field}" == "$value" ]]
+    parse_args "$option" cli_value
+    [[ "${!field}" == cli_value ]]
+}
+while read -r option variable field; do
+    check "DEB-ENV-$variable" 0 env_value "$work/builder.sh" "$option" "$variable" "$field" env_value
+done <<'MAP'
+--mode PGCC_MODE MODE
+--pg-family PGCC_PG_FAMILY pg
+--pg-version PGCC_PG_VERSION pg_ver
+--cluster-name PGCC_CLUSTER_NAME cls_nm
+--port PGCC_CLUSTER_PORT cls_pt
+--package PGCC_PACKAGE SERVER_PACKAGE
+--schema PGCC_SCHEMA cls_ch
+--user PGCC_DB_USER cls_us
+--password PGCC_DB_PASSWORD cls_pw
+--data-root PGCC_DATA_ROOT DATA_ROOT
+--backup-file PGCC_BACKUP_FILE BACKUP_FILE
+--sql-file PGCC_SQL_FILE SQL_FILE
+--backup-dir PGCC_BACKUP_DIR BACKUP_DIR
+--database PGCC_DATABASE DATABASE_NAME
+--depends PGCC_DEPENDS EXTRA_DEPENDENCIES_INPUT
+--output-dir PGCC_OUTPUT_DIR OUTPUT_DIR
+MAP
+for mapping in '--backup-dir PGCC_BACKUP_DIR BACKUP_DIR' '--files-cnt PGCC_FILES_CNT FILES_COUNT' '--files-size PGCC_FILES_SIZE FILES_SIZE'; do
+    read -r option variable field <<<"$mapping"
+    check "BK-ENV-$variable" 0 env_value "$repo/create-claster-backup.sh" "$option" "$variable" "$field" env_value
+done
+builder_env_flags() {
+    source "$work/builder.sh"; trap - EXIT
+    PGCC_INTERACTIVE=no; PGCC_FORCE=yes; PGCC_DEPENDS=curl
+    parse_args
+    [[ "$(normalize_env_flag "$INTERACTIVE_MODE" test)" == no && "$(normalize_env_flag "$FORCE_BUILD" test)" == yes ]]
+    parse_args --interactive --depends jq --depends wget
+    [[ "$INTERACTIVE_MODE" == yes && "$EXTRA_DEPENDENCIES_INPUT" == jq,wget ]]
+}
+wrapper_env_target() {
+    source "$repo/create-claster-backup.sh"; trap - EXIT
+    PGCC_PG_VERSION=16; PGCC_CLUSTER_NAME=env_cluster; PGCC_DATABASE=env_db; PGCC_CRON=yes
+    if [[ "$1" == cli ]]; then parse_args 17 cli_cluster cli_db; [[ "${POSITIONAL_ARGS[*]}" == '17 cli_cluster cli_db' ]];
+    else parse_args; [[ "${POSITIONAL_ARGS[*]}" == '16 env_cluster env_db' ]]; fi
+    [[ "$CREATE_CRON" == 1 ]]
+}
+wrapper_env_bad() {
+    source "$repo/create-claster-backup.sh"; trap - EXIT
+    if [[ "$1" == target ]]; then PGCC_PG_VERSION=16; else PGCC_CRON=invalid; fi
+    parse_args
+}
+check DEB-ENV-FLAGS 0 builder_env_flags
+check BK-ENV-TARGET 0 wrapper_env_target env
+check BK-ENV-TARGET-CLI 0 wrapper_env_target cli
+check BK-ENV-PARTIAL-TARGET nonzero wrapper_env_bad target
+check BK-ENV-BAD-BOOL nonzero wrapper_env_bad boolean
+main_env_value() {
+    source "$repo/create-claster.sh"; trap - EXIT
+    local option="$1" variable="$2" field="$3" value="$4" cli_value="$5"
+    printf -v "$variable" '%s' "$value"
+    apply_runtime_options
+    [[ "${!field}" == "$value" ]]
+    parse_args "$option" "$cli_value"
+    apply_runtime_options
+    [[ "${!field}" == "$cli_value" ]]
+}
+while read -r option variable field value cli_value; do
+    check "MAIN-ENV-$variable" 0 main_env_value "$option" "$variable" "$field" "$value" "$cli_value"
+done <<'MAP'
+--action PGCC_ACTION ACTION info backup
+--package PGCC_PACKAGE REQUESTED_PACKAGE postgresql-16 postgresql-17
+--pg-family PGCC_PG_FAMILY pg postgresql tantor-be
+--pg-version PGCC_PG_VERSION pg_ver 16 17
+--cluster-name PGCC_CLUSTER_NAME cls_nm env_name cli_name
+--port PGCC_CLUSTER_PORT cls_pt 5555 5556
+--schema PGCC_SCHEMA cls_ch env_name cli_name
+--user PGCC_DB_USER cls_us env_name cli_name
+--password PGCC_DB_PASSWORD cls_pw env_value cli_value
+--data-root PGCC_DATA_ROOT INSTALL_DATA_ROOT /env /cli
+--backup-file PGCC_BACKUP_FILE BACKUP_FILE /env /cli
+--backup-dir PGCC_BACKUP_DIR backup_dir /env /cli
+--backup-type PGCC_BACKUP_TYPE BACKUP_TYPE hot cold
+--database PGCC_DATABASE DATABASE_NAME env_name cli_name
+--backup-before-delete PGCC_BACKUP_BEFORE_DELETE BACKUP_BEFORE_DELETE no yes
+--clear-wal PGCC_CLEAR_WAL CLEAR_WAL no yes
+--overwrite PGCC_OVERWRITE OVERWRITE_EXISTING no yes
+MAP
 ! grep -q $'\tFAIL\t' "$logs/results.tsv"

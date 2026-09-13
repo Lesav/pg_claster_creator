@@ -5,8 +5,8 @@
 # Output: live-extension evidence; parent cleans QA clusters and restores config.
 # Example: PGCC_LIVE_EXTENSION=/repo/tools/prx-test-live-edges.sh bash /repo/tools/prx-test-live-regression.sh /repo Astra 18 tantor-be-server-18 tantor-be 59010 2.4.2 /repo/tmp/run extension
 sql() { runuser -u postgres -- psql --cluster "$v/$1" -X --set=ON_ERROR_STOP=1 --dbname "$2" -Atqc "$3"; }
-hot="$(find "$core_work/backups" -maxdepth 1 -name '*-dmp.tar.gz' -print -quit)"
-cold="$(find "$core_work/backups" -maxdepth 1 -name "$v-$core_c-????????-??????.tar.gz" -print -quit)"
+hot="$(find "$core_backup" -maxdepth 1 -name '*-dmp.tar.gz' -print -quit)"
+cold="$(find "$core_backup" -maxdepth 1 -name "$v-$core_c-????????-??????.tar.gz" -print -quit)"
 [[ -n "$hot" && -n "$cold" ]]
 sha256sum "$hot" "$cold" >"$logs/input-sha.log"
 step ENV-INSTALL 0 timeout -k 5 900 env PGCC_ACTION=install PGCC_PACKAGE="$package" PGCC_PG_VERSION="$v" PGCC_CLUSTER_NAME="$c" PGCC_CLUSTER_PORT="$port" PGCC_DATA_ROOT="$data_root" PGCC_SCHEMA=pgcc_owner PGCC_DB_USER=pgcc_user PGCC_DB_PASSWORD=Pgcc-QA-2.1.1! PGCC_BACKUP_DIR="$backup" "$creator"
@@ -24,7 +24,7 @@ step CORRUPT-ARCHIVE nonzero timeout -k 5 60 "$creator" --action restore --backu
 step BAD-ARCHIVES-SOURCE 0 verify_reference "$c" qa_cross
 # Preserve exact original members/metadata; never repack an extracted parent tree.
 mkdir "$work/legacy"
-legacy="$work/legacy/${cold##*/}"
+legacy="$backup/${cold##*/}"
 make_legacy() {
     # Refuse the erroneous parent-tree archives from older test attempts.
     # These shared directory entries are not emitted as roots by our backup.

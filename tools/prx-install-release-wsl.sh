@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
+# Path note: If /mnt/d/Ai/pg_claster_creator in the example does not match
+# your filesystem, replace it with the actual project path before running.
 # Purpose: install a scripts-only release and verify files while preserving cluster/config state.
-# Usage: bash tools/prx-install-release-wsl.sh REPO DISTRO VERSION [JOURNAL_VERSION]
+# Usage: bash tools/prx-install-release-wsl.sh REPO DISTRO VERSION [LEGACY_JOURNAL]
 # Args: REPO -- project root; DISTRO -- evidence label; VERSION -- scripts-only release;
-#   JOURNAL_VERSION -- packaged historical journal version (default: 2.1.2).
+#   LEGACY_JOURNAL -- ignored compatibility slot; all root Markdown files are checked.
 # Output: REPO/tmp/release-VERSION/DISTRO/install.log; root-only baseline under /var/tmp.
 # Example: bash tools/prx-install-release-wsl.sh /mnt/d/Ai/pg_claster_creator Astra 2.4.2 2.1.2
 set -Eeuo pipefail
 repo="$1"; distro="$2"; version="$3"
-journal_version="${4:-2.1.2}"
 package="$repo/dist/claster-creator-$version.deb"
 logs="$repo/tmp/release-$version/$distro"
 [[ ! -e "$logs/install.log" ]] || { printf 'Installation log already exists: %s\n' "$logs/install.log" >&2; exit 2; }
@@ -40,7 +41,9 @@ done
 for name in create-claster.sh create-claster-backup.sh; do
     [[ "$(readlink -f "/usr/local/bin/$name")" == "/usr/local/share/pg_claster_creator/$name" ]]
 done
-cmp "$repo/TEST-$journal_version-journal-passed.md" "/usr/local/share/pg_claster_creator/TEST-$journal_version-journal-passed.md"
+while IFS= read -r -d '' document; do
+    cmp "$document" "/usr/local/share/pg_claster_creator/${document##*/}"
+done < <(find "$repo" -maxdepth 1 -type f -name '*.md' -print0)
 [[ ! -s "$work/config.sha" ]] || sha256sum -c "$work/config.sha"
 if [[ -f "$work/shared-config-absent" ]]; then
     [[ ! -e /usr/local/shared/pg_claster_creator/.new-claster.config && ! -L /usr/local/shared/pg_claster_creator/.new-claster.config ]]

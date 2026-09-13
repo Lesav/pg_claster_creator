@@ -1,20 +1,31 @@
 #!/usr/bin/env bash
+# Path note: If /mnt/d/Ai/pg_claster_creator in the example does not match
+# your filesystem, replace it with the actual project path before running.
 # Purpose: stage a release on Linux FS to avoid DrvFS package ownership/mode issues.
-# Usage: bash tools/prx-build-release-local.sh REPO VERSION JOURNAL_VERSION [BASELINE_VERSION [CONFIG_FILE]]
-# Args: REPO -- source directory; VERSION -- release; JOURNAL_VERSION -- evidence version.
+# Usage: bash tools/prx-build-release-local.sh REPO VERSION [LEGACY_JOURNAL [BASELINE_VERSION [CONFIG_FILE]]]
+# Args: REPO -- source directory; VERSION -- release; LEGACY_JOURNAL -- ignored compatibility slot.
 #   BASELINE_VERSION -- optional local DEB whose shell logic must remain unchanged.
-#   CONFIG_FILE -- optional distribution config; defaults to REPO/.new-claster.config.
+#   CONFIG_FILE -- optional distribution config; overrides PGCC_CFG.
+# Environment: PGCC_CFG selects a distribution config when CONFIG_FILE is omitted;
+#   otherwise use REPO/.new-claster.config. Relative paths use the invocation cwd.
+#   The selected file is copied to staging and passed explicitly to the builder,
+#   so a system config cannot replace the distribution config.
 # Output: verified gzip-only DEB in REPO/dist; no package installation.
 # Example: bash tools/prx-build-release-local.sh /mnt/d/Ai/pg_claster_creator 2.2.0 2.1.2
 set -Eeuo pipefail
-repo="$1"; version="$2"; journal_version="$3"
+repo="$1"; version="$2"
 baseline_version="${4:-}"
-config_source="${5:-$repo/.new-claster.config}"
+config_source="${5:-${PGCC_CFG:-$repo/.new-claster.config}}"
+config_source="$(realpath -e -- "$config_source")"
+[[ -f "$config_source" && -r "$config_source" ]]
 stage="$(mktemp -d /tmp/pgcc-release.XXXXXX)"
 trap 'rm -rf -- "$stage"' EXIT
-for f in create-claster.sh create-claster-backup.sh create-claster-deb.sh README.md TEST.md CHANGELOG.md "TEST-$journal_version-journal-passed.md"; do
+for f in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
     cp -- "$repo/$f" "$stage/$f"
 done
+while IFS= read -r -d '' document; do
+    cp -- "$document" "$stage/${document##*/}"
+done < <(find "$repo" -maxdepth 1 -type f -name '*.md' -print0)
 cp -- "$config_source" "$stage/.new-claster.config"
 cp -R -- "$repo/man" "$stage/man"
 if [[ -n "$baseline_version" ]]; then
@@ -27,34 +38,31 @@ if [[ -n "$baseline_version" ]]; then
         printf 'PASS: unchanged logic against %s: %s\n' "$baseline_version" "$name"
     done
 fi
-# Refuse an unexpected external config in the build environment.
-[[ ! -e /usr/local/shared/pg_claster_creator/.new-claster.config ]]
+# Always build from the staged distribution config, not the host's defaults.
 for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
     bash -n "$stage/$name"
     bash "$stage/$name" --version | grep -F "$version"
     bash "$stage/$name" --help >/dev/null
 done
-bash "$stage/create-claster-deb.sh" --mode 1 --non-interactive --output-dir "$repo/dist" --force
+bash "$stage/create-claster-deb.sh" --config "$stage/.new-claster.config" --mode 1 --non-interactive --output-dir "$repo/dist" --force
 [[ ! -e "$stage/tmp" ]]
 package="$repo/dist/claster-creator-$version.deb"
 [[ "$(ar t "$package")" == $'debian-binary\ncontrol.tar.gz\ndata.tar.gz' ]]
 [[ "$(dpkg-deb -f "$package" Version)" == "$version" ]]
 dpkg-deb --fsys-tarfile "$package" > "$stage/payload.tar"
-member="./usr/local/share/pg_claster_creator/TEST-$journal_version-journal-passed.md"
-tar -xOf "$stage/payload.tar" "$member" > "$stage/extracted-journal"
-cmp "$stage/extracted-journal" "$repo/TEST-$journal_version-journal-passed.md"
-tar -tvf "$stage/payload.tar" "$member" | tee "$stage/entry"
-grep -q '^-rw-r--r-- root/root ' "$stage/entry"
+while IFS= read -r -d '' document; do
+    member="./usr/local/share/pg_claster_creator/${document##*/}"
+    tar -xOf "$stage/payload.tar" "$member" > "$stage/extracted-markdown"
+    cmp "$stage/extracted-markdown" "$document"
+    tar -tvf "$stage/payload.tar" "$member" | tee "$stage/entry"
+    grep -q '^-rw-r--r-- root/root ' "$stage/entry"
+done < <(find "$repo" -maxdepth 1 -type f -name '*.md' -print0)
+tar -tf "$stage/payload.tar" > "$stage/payload.list"
+! grep -q '/tests/' "$stage/payload.list"
 tar -xOf "$stage/payload.tar" ./usr/local/share/pg_claster_creator/.new-claster.config > "$stage/extracted-config"
 cmp "$stage/extracted-config" "$config_source"
-for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh README.md TEST.md CHANGELOG.md; do
+for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
     tar -xOf "$stage/payload.tar" "./usr/local/share/pg_claster_creator/$name" > "$stage/extracted-file"
     cmp "$stage/extracted-file" "$repo/$name"
 done
-sed '/^main "\$@"$/d' "$stage/create-claster-deb.sh" > "$stage/check-builder.sh"
-mv "$stage/TEST-$journal_version-journal-passed.md" "$stage/journal-hidden"
-for mode in 1 2 3 4 5; do
-    if (source "$stage/check-builder.sh"; MODE="$mode"; build_package) > "$stage/error" 2>&1; then exit 1; fi
-    grep -q 'не найден журнал успешного тестирования' "$stage/error"
-done
-echo 'PASS: tmp cleanup, gzip control/data, version, help, syntax, journal bytes/path/0644, source config/scripts/docs, missing-journal rejection'
+echo 'PASS: tmp cleanup, gzip control/data, version, help, syntax, root Markdown bytes/path/0644, source config/scripts, tests excluded'
