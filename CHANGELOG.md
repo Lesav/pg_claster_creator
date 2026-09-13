@@ -4,10 +4,14 @@ All significant project changes are recorded in this file.
 
 [Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
 
-## Unreleased
+## 2.5.4 — 2026-09-13
 
 - Adopted the MIT License, copyright 2026 Andrei Lesnykh; added license notices to the three main scripts and both READMEs.
 - All DEB modes now require and include LICENSE beside the installed scripts and as `/usr/share/doc/claster-creator/copyright`. The release-build helper stages and verifies both copies. Cluster-management logic is unchanged.
+- Reorganized README in English with a Russian technical translation; retained the Russian changelog in CHANGELOG_ru.md and translated the release history into English.
+- Added GitFlic 4.5 CI for Bash syntax, scripts-only DEB builds and package-content verification on a Shell runner tagged `pgcc-deb`. Generated packages are job artifacts, never Git content; matching `vX.Y.Z` tags publish DEB and SHA-256 release attachments.
+- Set executable permissions explicitly on staged scripts so fakeroot re-execution works from clean Linux Git checkouts, not only Windows mounts.
+- Runtime CLI/environment interfaces and cluster behavior are unchanged. The 2.5.3 journal remains evidence for its recorded scope; this packaging/documentation release does not claim a new full cluster test.
 
 ## 2.5.3 — 2026-09-13
 
