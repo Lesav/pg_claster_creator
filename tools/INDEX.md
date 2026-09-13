@@ -2,6 +2,8 @@ prx-test-postgres-backups.sh — create and inspect hot/cold PostgreSQL backups
 prx-test-postgres-port-data.sh — test PostgreSQL port switching and data relocation
 prx-test-tantor-editions.sh — test Tantor edition and physical backup version selection
 prx-build-release-local.sh — build and verify a release DEB on a Linux filesystem
+prx-ci-build.sh — run non-destructive CI syntax, DEB content and artifact checks
+prx-publish-gitflic-release.py — publish tag releases with verified attachments using CI_JOB_TOKEN
 prx-install-release-wsl.sh — install a scripts-only release and verify cluster/config preservation
 prx-test-deb-tmp-cleanup.sh — test builder temporary directory ownership and cleanup
 prx-test-wsl-preflight.sh — collect WSL baseline and test informational CLI and man

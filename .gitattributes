@@ -1,5 +1,7 @@
 /.gitattributes text eol=lf
 /.gitignore text eol=lf
+/gitflic-ci.yaml text eol=lf
+/CI.md text eol=lf
 /LICENSE text eol=lf
 /.new-claster.config text eol=lf
 /CHANGELOG.md text eol=lf

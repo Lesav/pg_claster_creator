@@ -70,5 +70,15 @@ cmp "$stage/extracted-config" "$config_source"
 for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
     tar -xOf "$stage/payload.tar" "./usr/local/share/pg_claster_creator/$name" > "$stage/extracted-file"
     cmp "$stage/extracted-file" "$repo/$name"
+    tar -tvf "$stage/payload.tar" "./usr/local/share/pg_claster_creator/$name" | grep -q '^-rwxr-xr-x root/root '
 done
-echo 'PASS: tmp cleanup, gzip control/data, version, help, syntax, root Markdown bytes/path/0644, source config/scripts, tests excluded'
+for language in en ru; do
+    for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
+        man_prefix=./usr/share/man
+        [[ $language != ru ]] || man_prefix+=/ru
+        tar -xOf "$stage/payload.tar" "$man_prefix/man1/$name.1.gz" | gzip -dc > "$stage/extracted-man"
+        cmp "$stage/extracted-man" "$repo/man/$language/man1/$name.1"
+    done
+done
+! grep -Eq '/(tests|tools|tmp|dist|\.git)/' "$stage/payload.list"
+echo 'PASS: tmp cleanup, gzip control/data, version, help, syntax, root Markdown bytes/path/0644, source config/scripts/0755, six manuals, development directories excluded'

@@ -183,7 +183,7 @@ bash ./create-claster-deb.sh --config ./.new-claster.config \
   --mode 1 --non-interactive
 ```
 
-The output is `dist/claster-creator-2.5.3.deb`. Generated `dist/` contents are ignored by Git in this repository. Automated release publication is not configured yet.
+The output is `dist/claster-creator-2.5.3.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI checks and builds the package, retains it as a job artifact, and publishes DEB/checksum attachments for matching `vX.Y.Z` tags. See [CI and release builds](CI.md) for runner requirements and verification scope.
 
 Install this scripts-only package on a host with the required repositories configured:
 
