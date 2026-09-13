@@ -30,11 +30,31 @@ The runner also needs its vendor-matched Java runtime, `helper.jar` and
    and checksums, then downloads attachments again to verify SHA-256.
 
 Release attachments are independent of expiring job artifacts. The publisher
-uses the automatically provided **CI_JOB_TOKEN**, not a runner registration
-token or personal access token. It sends `Authorization: token ...` to the
+requires **GITFLIC_RELEASE_TOKEN**, a user API token supplied as a secret project
+CI variable. It never uses, changes or falls back to **CI_JOB_TOKEN**, which
+remains runner-managed. Missing/invalid release credentials stop publication
+before any API request. It sends `Authorization: token ...` to the
 same GitFlic origin's `/rest-api` (or `https://api.gitflic.ru` for gitflic.ru).
 Do not print the environment or enable shell tracing around secrets. HTTP does
 not encrypt tokens or artifacts; use HTTPS for deployments that provide it.
+
+### Configure release credentials
+
+Create a user API token with project read/write scopes. The user must have
+`MANAGE_RELEASE` permission for publication and `EXECUTE_CI_CD` for explicit
+pipeline starts. Prefer a dedicated service account with access only to the
+intended project and an expiring token. In the project's CI variable settings,
+add `GITFLIC_RELEASE_TOKEN` as a secret/masked variable; enter its value only
+in the GitFlic UI, never in YAML, command arguments, Git or artifacts.
+Restrict secret availability to trusted release refs/jobs using the controls
+supported by the installation. Masking alone does not prevent untrusted job
+code from reading a secret; do not expose it to untrusted branches or forks.
+The build and offline publisher tests need no release token. Do not put an
+empty placeholder variable in YAML that could override the configured secret.
+
+Existing tags keep their old publisher code: restarting `v2.5.4` does not pick
+up this change. Commit and review the update before testing a new release;
+do not move an existing release tag just to test authentication.
 
 ## Local check
 
@@ -54,14 +74,20 @@ End-to-end automatic releases on `gf.icd.nikiet.ru` **are not yet operational**:
 
 - A tag push does not automatically create a tag pipeline on the tested 4.5.0
   installation. Starting from the tag's UI works; REST pipeline start using
-  `CI_JOB_TOKEN` returns 403. Do not grant broader token permissions implicitly.
+  `CI_JOB_TOKEN` returns 403. A user API token successfully started tag pipeline
+  #15 for `v2.5.4`; this does not fix automatic triggering on tag push.
 - Release creation using `CI_JOB_TOKEN` returns 500 with
-  `org.springframework.dao.InvalidDataAccessApiUsageException.type`; the exact
-  server-side cause needs the administrator's logs.
+  `org.springframework.dao.InvalidDataAccessApiUsageException.type`: the runner
+  principal has a null database user ID, passed to `userService.getById()`.
+  A user API token created the diagnostic prerelease successfully (HTTP 200,
+  non-null `authorId`), release ID `a9b8febe-f94e-4daf-b99d-1b5a2da7af75`.
 - Release upload rejects the original DEB with 415 and explicitly identifies
-  `application/x-debian-package` as unsupported. The administrator must review
-  the allowed release file types; disguising the file or changing the client's
-  declared Content-Type is not a fix.
+  `application/x-debian-package` as unsupported. Installed 4.5.0 uses the compiled
+  `TikaFileExtensionUtils.RELEASE_ARCHIVE_MEDIATYPES` allowlist, not an ordinary
+  configuration property. A server fix is required; disguising the file or
+  changing the client's declared Content-Type is not a fix. User authentication
+  does not bypass this restriction. `text/plain` for SHA256SUMS is also absent
+  from that list; its upload still needs a separate integration check.
 - The original job artifact was downloaded and its DEB checksum verified against
   its SHA256SUMS, but **release attachment download verification is blocked**:
   there is no successfully uploaded release DEB yet.

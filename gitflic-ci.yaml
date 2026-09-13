@@ -15,6 +15,8 @@ build-deb:
     expire_in: 30 days
 
 publish-release:
+  # Supply GITFLIC_RELEASE_TOKEN as a secret project CI variable, never in YAML.
+  # The publisher does not use or overwrite the runner-provided CI_JOB_TOKEN.
   stage: release
   tags:
     - pgcc-deb

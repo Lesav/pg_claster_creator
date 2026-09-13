@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Purpose: Exercise release publishing guards with an in-memory GitFlic API fixture.
+# Purpose: Exercise release-token isolation and publishing guards with an in-memory API fixture.
 # Usage: python3 -B tools/prx-test-gitflic-publisher.py PATH_TO_PUBLISHER
 # Args: PATH_TO_PUBLISHER is the release publisher script under test.
 # Output: unittest results; no network, Git writes or cluster operations.
@@ -14,7 +14,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
 spec = importlib.util.spec_from_file_location('publisher', sys.argv.pop(1))
 publisher = importlib.util.module_from_spec(spec)
@@ -111,6 +111,75 @@ class Tests(unittest.TestCase):
     def test_missing_token(self):
         with self.assertRaises(ValueError):
             publisher.Client(None)
+
+    def run_main(self, environment):
+        output = io.StringIO()
+        argv = ['publisher', '--artifact', self.args.artifact[0], '--notes', self.args.notes]
+        with patch.dict(publisher.os.environ, environment, clear=True), \
+                patch.object(sys, 'argv', argv), \
+                patch.object(publisher, 'publish') as publish_mock, \
+                contextlib.redirect_stderr(output):
+            status = publisher.main()
+            self.assertEqual(dict(publisher.os.environ), environment)
+        return status, publish_mock, output.getvalue()
+
+    def test_release_token_without_job_token(self):
+        status, called, error = self.run_main({'GITFLIC_RELEASE_TOKEN': 'user-test-secret'})
+        self.assertEqual(status, 0)
+        self.assertEqual(called.call_args[0][1].token, 'user-test-secret')
+        self.assertEqual(error, '')
+
+    def test_release_token_selected_without_mutating_job_token(self):
+        status, called, error = self.run_main({
+            'GITFLIC_RELEASE_TOKEN': 'user-test-secret', 'CI_JOB_TOKEN': 'job-test-secret'})
+        self.assertEqual(status, 0)
+        self.assertEqual(called.call_args[0][1].token, 'user-test-secret')
+        self.assertEqual(error, '')
+
+    def test_job_token_alone_is_not_a_fallback(self):
+        status, called, error = self.run_main({'CI_JOB_TOKEN': 'job-test-secret'})
+        self.assertEqual(status, 1)
+        called.assert_not_called()
+        self.assertIn('GITFLIC_RELEASE_TOKEN', error)
+        self.assertNotIn('job-test-secret', error)
+
+    def test_invalid_release_token_does_not_fall_back_or_leak(self):
+        for token in ('', ' ', 'user-test-secret\n', 'user-test-secret\r',
+                      'user test secret', 'user-test-secret\u2603'):
+            with self.subTest(token_kind=repr(token[-1:])):
+                status, called, error = self.run_main({
+                    'GITFLIC_RELEASE_TOKEN': token, 'CI_JOB_TOKEN': 'job-test-secret'})
+                self.assertEqual(status, 1)
+                called.assert_not_called()
+                self.assertIn('GITFLIC_RELEASE_TOKEN', error)
+                self.assertNotIn('user-test-secret', error)
+                self.assertNotIn('job-test-secret', error)
+
+    def test_null_byte_rejected_by_client(self):
+        # Real process environments cannot contain NUL; test validation directly.
+        with self.assertRaisesRegex(ValueError, 'GITFLIC_RELEASE_TOKEN'):
+            publisher.Client('user-test-secret\x00')
+
+    def test_user_token_authorization_header(self):
+        client = publisher.Client('user-test-secret')
+        response = Mock()
+        response.read.return_value = b'{}'
+        client.opener = MagicMock()
+        client.opener.open.return_value.__enter__.return_value = response
+        self.assertEqual(client.get('http://example.invalid'), {})
+        request = client.opener.open.call_args[0][0]
+        self.assertEqual(request.get_header('Authorization'), 'token user-test-secret')
+
+    def test_help_documents_secret_environment_without_values(self):
+        output = io.StringIO()
+        with patch.dict(publisher.os.environ, {'GITFLIC_RELEASE_TOKEN': 'user-test-secret'}, clear=True), \
+                patch.object(sys, 'argv', ['publisher', '--help']), \
+                contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as caught:
+            publisher.main()
+        self.assertEqual(caught.exception.code, 0)
+        self.assertIn('GITFLIC_RELEASE_TOKEN', output.getvalue())
+        self.assertIn('no credential fallback', output.getvalue())
+        self.assertNotIn('user-test-secret', output.getvalue())
 
     def test_redirects_disabled(self):
         self.assertIsNone(publisher.NoRedirect().redirect_request(None, None, 302, '', {}, 'http://other.invalid'))

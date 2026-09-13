@@ -4,6 +4,11 @@ All significant project changes are recorded in this file.
 
 [Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
 
+## Unreleased
+
+- The GitFlic release publisher now requires a separate secret `GITFLIC_RELEASE_TOKEN` (user API token). It neither uses nor changes `CI_JOB_TOKEN` and fails before API requests when the release token is missing or invalid. Added offline authentication-isolation tests and CI setup instructions; PostgreSQL scripts and their interfaces are unchanged.
+- Confirmed user-token release creation with an author and explicit tag-pipeline start on GitFlic 4.5.0. DEB attachments remain blocked by the server's compiled MIME allowlist; end-to-end automatic publication is not yet confirmed.
+
 ## 2.5.4 — 2026-09-13
 
 - Adopted the MIT License, copyright 2026 Andrei Lesnykh; added license notices to the three main scripts and both READMEs.

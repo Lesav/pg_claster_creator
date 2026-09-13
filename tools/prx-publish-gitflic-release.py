@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-# Purpose: Publish verified files as a GitFlic release using a job-scoped token.
+# Purpose: Publish verified files as a GitFlic release using an explicit user API token.
 # Usage: python3 tools/prx-publish-gitflic-release.py --artifact FILE [--artifact FILE] --notes CHANGELOG.md
 # Args: --project-url URL, --tag vX.Y.Z, --commit SHA override their CI_* defaults.
 #   --api-url URL overrides the derived API root but must use the same origin
 #   (gitflic.ru -> api.gitflic.ru is the only cross-origin exception).
 # Output: A release with SHA-256-verified attachments; existing equal files are reused.
-# Environment: CI_PROJECT_URL, CI_COMMIT_TAG, CI_COMMIT_SHA, CI_JOB_TOKEN.
-#   CI_JOB_TOKEN is required and is never accepted as a CLI argument or printed.
+# Environment: CI_PROJECT_URL, CI_COMMIT_TAG, CI_COMMIT_SHA, GITFLIC_RELEASE_TOKEN.
+#   GITFLIC_RELEASE_TOKEN is required, supplied as a secret CI variable, never
+#   accepted as a CLI argument or printed. CI_JOB_TOKEN is neither used nor changed;
+#   missing/invalid release credentials fail before any API request, without fallback.
 # Example: python3 tools/prx-publish-gitflic-release.py --artifact dist/package.deb --notes CHANGELOG.md
 # Safety: No tag moves, release/file deletions, overwrites or HTTP redirects; retries reuse matching files.
 # Diagnostics: GitFlic 4.5.0 may reject DEB media types (415) or release creation
-#   with CI_JOB_TOKEN (500). Report sanitized exception types; never bypass the
-#   server media policy or silently replace job authentication with a personal token.
+#   with CI_JOB_TOKEN (500: the runner principal has no database user ID).
+#   User API authentication supports release authorship but does not bypass MIME
+#   validation. In 4.5.0 the release MIME allowlist is compiled into the server.
 import argparse
 import hashlib
 import json
@@ -54,14 +57,14 @@ def endpoints(project_url, api_url=None):
     allowed = (api.scheme, api.netloc) == (parsed.scheme, parsed.netloc)
     allowed |= origin == "https://gitflic.ru" and base.rstrip("/") == "https://api.gitflic.ru"
     if not allowed or api.username or api.password or api.query or api.fragment:
-        raise ValueError("Refusing to send job token to a different origin")
+        raise ValueError("Refusing to send release token to a different origin")
     return base.rstrip("/") + match.group(0).rstrip("/") + "/release"
 
 
 class Client:
     def __init__(self, token):
-        if not token or "\n" in token or "\r" in token:
-            raise ValueError("CI_JOB_TOKEN is required")
+        if not token or not re.fullmatch(r"[!-~]+", token):
+            raise ValueError("GITFLIC_RELEASE_TOKEN is required and must be a nonempty printable ASCII token without whitespace")
         self.token = token
         self.opener = urllib.request.build_opener(NoRedirect())
 
@@ -83,7 +86,7 @@ class Client:
                 if isinstance(candidate, str) and re.fullmatch(r"[a-zA-Z0-9._-]{1,180}", candidate):
                     kind = candidate
                 if error.code == 415 and "application/x-debian-package" in str(diagnostic.get("detail", "")):
-                    hint = "; server rejects application/x-debian-package: ask the GitFlic administrator to review allowed release file types"
+                    hint = "; server rejects application/x-debian-package: GitFlic 4.5.0 uses a compiled release MIME allowlist; a server fix is required"
             except (ValueError, TypeError, AttributeError):
                 pass
             # Even a syntactically safe server value must not disclose our token.
@@ -166,7 +169,10 @@ def publish(args, client):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__ or "Publish a GitFlic release from a tag pipeline")
+    parser = argparse.ArgumentParser(
+        description="Publish a GitFlic release from a tag pipeline",
+        epilog="Requires secret environment variable GITFLIC_RELEASE_TOKEN (user API token). "
+               "CI_JOB_TOKEN is not used or changed; there is no credential fallback.")
     parser.add_argument("--project-url", default=os.environ.get("CI_PROJECT_URL"))
     parser.add_argument("--tag", default=os.environ.get("CI_COMMIT_TAG"))
     parser.add_argument("--commit", default=os.environ.get("CI_COMMIT_SHA"))
@@ -175,7 +181,7 @@ def main():
     parser.add_argument("--notes", required=True)
     args = parser.parse_args()
     try:
-        publish(args, Client(os.environ.get("CI_JOB_TOKEN")))
+        publish(args, Client(os.environ.get("GITFLIC_RELEASE_TOKEN")))
     except (ValueError, RuntimeError, OSError, KeyError, TypeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
