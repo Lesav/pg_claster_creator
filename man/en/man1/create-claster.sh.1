@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-13" "pg_claster_creator 2.5.2" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-13" "pg_claster_creator 2.5.3" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -276,6 +276,15 @@ sudo create-claster.sh --action restore \
   --backup-file /backup/16-asvd-20260905-105802-dmp.tar.gz \
   --pg-version 16 --cluster-name subsys --database asvd
 .fi
+.SH WSL SYSLOG-NG
+For functional testing on WSL without /dev/parsec only, the script repairs exact
+native Astra cluster snippets that reference missing PostgreSQL audit parsers.
+It collects the registered log as raw text, not structured Astra audit events.
+Custom configurations and non-WSL physical or virtual machines are unchanged.
+The original snippet is saved; bounded syntax and expanded parser checks must
+succeed or the original is restored. No syslog-ng reload/restart or global
+PARSEC changes are performed. Review and apply the configuration explicitly;
+this is not a fix for PID 1 crashes. See the script header for diagnostics.
 .SH SEE ALSO
 .BR create-claster-backup.sh (1),
 .BR pg_lsclusters (1),

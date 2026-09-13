@@ -26,7 +26,7 @@ step() {
     return "$rc"
 }
 if [[ "${6:-}" != prepared ]]; then
-    step bootstrap bash "$repo/tmp/full-${release}-packages.sh" "$distro" "$package" "$v" "$family" "$port" || exit 1
+    step bootstrap bash "$repo/tools/prx-bootstrap-wsl-postgres.sh" "$distro" "$package" "$v" "$family" "$port" || exit 1
 fi
 buildsrc="/var/tmp/pgcc-buildsrc-$port"
 [[ ! -e "$buildsrc" ]]; mkdir -m 0755 "$buildsrc"
@@ -35,7 +35,7 @@ find "$repo" -maxdepth 1 -type f -name '*.md' -exec cp -t "$buildsrc" -- {} +
 export PGCC_LIVE_WORKSPACE=1 PGCC_PREFLIGHT_WORKSPACE=1
 export PGCC_LIVE_BUILDER="$buildsrc/create-claster-deb.sh" PGCC_LIVE_BACKUP_ROOT="$base"
 step preflight bash "$repo/tools/prx-test-wsl-preflight.sh" "$repo" "$base/preflight" "$release" || true
-step fixtures bash "$repo/tmp/full-${release}-fixtures.sh" "$distro" || true
+step fixtures bash "$repo/tools/prx-test-wsl-fixtures.sh" "$distro" || true
 live() { bash "$repo/tools/prx-test-live-regression.sh" "$repo" "$distro" "$v" "$package" "$family" "$port" "$release" "$base" "$1"; }
 if step core live core; then
     for phase in extra ports ui; do
@@ -45,10 +45,10 @@ if step core live core; then
     export PGCC_LIVE_EXTENSION="$repo/tools/prx-test-live-edges.sh"
     step edges live extension || true
     [[ -z "$(pg_lsclusters --no-header)" ]] || exit 1
-    export PGCC_LIVE_EXTENSION="$repo/tmp/full-${release}-sql-module.sh"
+    export PGCC_LIVE_EXTENSION="$repo/tools/prx-test-live-sql.sh"
     step sql live extension-r2 || true
     if [[ -z "$(pg_lsclusters --no-header)" ]]; then
-        step dependencies bash "$repo/tmp/full-${release}-dependencies.sh" "$distro" "$package" "$v" "$family" "$port" || true
+        step dependencies bash "$repo/tools/prx-test-wsl-dependencies.sh" "$distro" "$package" "$v" "$family" "$port" || true
     fi
 fi
 printf 'PHASES FINISHED; final audit still required\n'

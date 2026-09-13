@@ -20,12 +20,48 @@
 #   Server package selection exits on 0, invalid/empty input or EOF without retrying.
 #   Cluster deletion stops and verifies the server, then removes exact cluster
 #   paths without pg_dropcluster or its potentially blocking syslog-ng reload.
+#   On WSL without PARSEC, repair stock cluster syslog snippets that reference
+#   missing Astra PostgreSQL parsers. Preserve the original, validate/rollback,
+#   and collect the registered log as raw text; this is not structured Astra audit.
+#   Valid/custom snippets and service/security settings are never replaced.
+#   syslog-ng is not restarted/reloaded implicitly; print the required next step.
 #   Cluster and vendor-service stop requests are announced on stderr before
 #   execution, including unattended and cleanup calls, without extra prompts.
 #   Displayed database and data-directory sizes use an aligned field of at most
 #   nine characters, including a space and a two-letter binary size unit.
 #   Every newly created backup contains a commented, shell-safe command that
 #   rebuilds the corresponding mode 3 or mode 4 Debian package non-interactively.
+#
+# WSL syslog-ng troubleshooting:
+#   This compatibility path is intended for functional testing on WSL; it is
+#   inactive on ordinary physical and virtual Linux machines outside WSL.
+#   Symptom: "Error resolving reference; content='parser', name='pgN_kv_parser'"
+#   or 'pgN_audit_parser' in mod-astra-postgres-N-CLUSTER.conf. Astra's native
+#   pg_createcluster generates these references even when the installed server
+#   (for example Tantor SE) does not provide the matching Astra audit parsers.
+#   The same template assumes PGDATA/pg_log, which may not be the real log path.
+#   repair_wsl_cluster_syslog only handles WSL without /dev/parsec, exact native
+#   templates with this diagnosed error, and unchanged PGCC-owned raw snippets.
+#   It reads the registered cluster log instead, preserves raw messages in
+#   /var/log/postgresql/syslog-ng-N-CLUSTER.log, and does NOT provide structured
+#   Astra audit events. Valid native/custom configs and non-WSL hosts are skipped.
+#   Backups: /etc/syslog-ng/conf.d/.pgcc-wsl-N-CLUSTER.*.bak (not included by *.conf).
+#   A failed bounded `syslog-ng --syntax-only` check restores the previous file.
+#   IMPORTANT: --syntax-only alone may accept unresolved parser references!
+#   Use --preprocess-into to expand includes and verify pgN parser definitions;
+#   the repair checks these references as well as syntax before accepting a file.
+#   No automatic reload/restart, package-hook changes or global PARSEC changes.
+#   Diagnose with `syslog-ng --syntax-only`, `systemctl cat syslog-ng.service`,
+#   `journalctl -u syslog-ng.service -n 50`, and `pg_lsclusters` (effective log).
+#   After reviewing a repair, explicitly apply it with a bounded service command
+#   such as `timeout -k 5 30 systemctl restart syslog-ng.service`, then check
+#   `systemctl is-active syslog-ng.service` and actual destination log delivery.
+#   Configuration validity alone is
+#   not proof that the running daemon has loaded the repaired configuration.
+#   A separate WSL failure, "pdplinux_capability_set_apply() failed", can come
+#   from syslog-ng-caps.conf / CapabilitiesParsec. This repair does not disable
+#   that security drop-in. Also check the boot journal: unsupported Manager keys
+#   such as Parsec=no/MAC=no can be ignored, not effective security switches.
 #
 # Actions accepted by --action / PGCC_ACTION:
 #   info       Display registered clusters using pg_lsclusters.
@@ -106,7 +142,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.5.2"
+readonly SCRIPT_VERSION="2.5.3"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -519,6 +555,136 @@ run_parsec_aware() {
     done <"${error_file}"
     rm -f -- "${error_file}"
     return "${status}"
+}
+
+# Separate path/render helpers make the WSL-only repair testable without touching
+# the host's configuration. They are internal functions, not an ENV interface.
+wsl_syslog_config_dir() { printf '/etc/syslog-ng/conf.d\n'; }
+
+render_stock_cluster_syslog() {
+    local version="$1" name="$2" data="$3"
+    cat <<EOF
+source s_pg${version}_${name} {
+    wildcard-file(
+        base-dir("${data}/pg_log")
+        recursive(no)
+        filename-pattern("*.log")
+        monitor-method(inotify)
+        program-override("postgres")
+        flags(no-hostname)
+    );
+};
+log {
+    source(s_pg${version}_${name});
+    parser(pg${version}_kv_parser);
+    parser(pg${version}_audit_parser);
+    destination(astra_json_dst);
+};
+EOF
+}
+
+render_wsl_cluster_syslog() {
+    local version="$1" name="$2" log="$3"
+    cat <<EOF
+# PGCC WSL raw PostgreSQL log v1
+# Missing Astra parsers: preserve messages, not structured Astra audit events.
+source s_pg${version}_${name} {
+    file("${log}" follow-freq(1)
+         program-override("postgres") flags(no-parse, no-hostname));
+};
+destination d_pg${version}_${name}_raw {
+    file("/var/log/postgresql/syslog-ng-${version}-${name}.log"
+         owner("root") group("postgres") perm(0640)
+         template("\${MESSAGE}\\n"));
+};
+log { source(s_pg${version}_${name}); destination(d_pg${version}_${name}_raw); };
+EOF
+}
+
+wsl_syslog_has_parser() {
+    grep -Eq "^[[:space:]]*parser[[:space:]]+$2([[:space:]]|\\{)" "$1"
+}
+
+validate_wsl_syslog_pg_parsers() {
+    local expanded="$1" parser bad=0
+    while IFS= read -r parser; do
+        if ! wsl_syslog_has_parser "$expanded" "$parser"; then
+            printf 'WSL syslog: undefined PostgreSQL parser: %s\n' "$parser" >&2
+            bad=1
+        fi
+    done < <(grep -oE 'parser[[:space:]]*\([[:space:]]*pg[0-9]+_(kv|audit)_parser[[:space:]]*\)' "$expanded" | sed -E 's/.*\([[:space:]]*//; s/[[:space:]]*\).*//' | sort -u || true)
+    return "$bad"
+}
+
+repair_wsl_cluster_syslog() (
+    local version="$1" name="$2" data="$3" log="$4" old_name="${5:-}" dir conf work backup candidate old_log owned=no
+    is_wsl_without_parsec || return 0
+    command -v syslog-ng >/dev/null 2>&1 || return 0
+    [[ "$version" =~ ^[0-9]+$ && "$name" =~ ^[a-z_][a-z0-9_]*$ ]] || return 0
+    dir="$(wsl_syslog_config_dir)"; conf="${dir}/mod-astra-postgres-${version}-${name}.conf"
+    [[ -d "$dir" && ! -L "$dir" && -f "$conf" && ! -L "$conf" ]] || return 0
+    # Never interpolate config metacharacters or read our own output in a loop.
+    [[ "$log" == /* && "$data" == /* && "$log" != "/var/log/postgresql/syslog-ng-${version}-${name}.log" ]] || return 0
+    case "$log$data" in *'"'*|*'\'*|*'$'*|*$'\n'*|*$'\r'*) warn 'WSL syslog: небезопасный путь; конфиг не изменён'; return 0 ;; esac
+    [[ ! -e "$log" || ( -f "$log" && ! -L "$log" ) ]] || return 0
+    work="$(mktemp -d /tmp/pgcc-syslog.XXXXXX)" || return 1
+    trap 'rm -rf -- "$work"; [[ -z "${candidate:-}" ]] || rm -f -- "$candidate"' EXIT
+    if grep -qxF '# PGCC WSL raw PostgreSQL log v1' "$conf"; then
+        old_log="$(sed -n 's/^    file("\([^"]*\)" follow-freq(1)$/\1/p' "$conf")"
+        [[ -n "$old_log" ]] || return 0
+        render_wsl_cluster_syslog "$version" "$name" "$old_log" >"$work/owned"
+        if [[ "$old_name" =~ ^[a-z_][a-z0-9_]*$ ]]; then
+            # Astra pg_renamecluster changes source IDs but leaves this hyphenated
+            # output filename unchanged. Accept only that exact native transition.
+            replace_literal_in_file "/var/log/postgresql/syslog-ng-${version}-${name}.log" "/var/log/postgresql/syslog-ng-${version}-${old_name}.log" "$work/owned"
+        fi
+        cmp -s "$conf" "$work/owned" || return 0
+        owned=yes
+    else
+        render_stock_cluster_syslog "$version" "$name" "$data" >"$work/stock"
+        # Only the exact native template may be replaced; even local comments
+        # or formatting changes are preserved as potentially intentional edits.
+        cmp -s "$conf" "$work/stock" || return 0
+        if ! timeout -k 2 15 syslog-ng --syntax-only --preprocess-into="$work/expanded" >"$work/check" 2>&1; then
+            warn 'WSL syslog: ошибка синтаксиса; автоматическое исправление не выполняется'
+            return 0
+        fi
+        [[ -s "$work/expanded" ]] || return 0
+        if wsl_syslog_has_parser "$work/expanded" "pg${version}_kv_parser" &&
+           wsl_syslog_has_parser "$work/expanded" "pg${version}_audit_parser"; then return 0; fi
+    fi
+    render_wsl_cluster_syslog "$version" "$name" "$log" >"$work/new"
+    cmp -s "$conf" "$work/new" && return 0
+    if [[ "$owned" == no && ( -e "/var/log/postgresql/syslog-ng-${version}-${name}.log" || -L "/var/log/postgresql/syslog-ng-${version}-${name}.log" ) ]]; then
+        warn 'WSL syslog: целевой raw-журнал уже существует; конфиг не изменён'; return 0
+    fi
+    backup="$(mktemp "${dir}/.pgcc-wsl-${version}-${name}.XXXXXX.bak")" || return 1
+    cp -p -- "$conf" "$backup" || return 1
+    candidate="$(mktemp "${dir}/.pgcc-wsl-${version}-${name}.XXXXXX.new")" || return 1
+    install -o root -g root -m 0644 "$work/new" "$candidate" || return 1
+    mv -fT -- "$candidate" "$conf" || return 1
+    candidate=""
+    if ! timeout -k 2 15 syslog-ng --syntax-only --preprocess-into="$work/expanded" >"$work/check" 2>&1 ||
+       [[ ! -s "$work/expanded" ]] ||
+       ! validate_wsl_syslog_pg_parsers "$work/expanded" >>"$work/check" 2>&1; then
+        cp -p -- "$backup" "$conf" || return 1
+        warn "WSL syslog: проверка не прошла, исходный конфиг восстановлен; копия: ${backup}"
+        cat "$work/check" >&2
+        return 1
+    fi
+    warn "WSL syslog: ${version}/${name}: включён raw-журнал вместо отсутствующих Astra-парсеров; копия: ${backup}"
+    warn 'Это не структурированный аудит Astra. Для применения выполните проверяемый reload/restart syslog-ng; сценарий его не вызывает.'
+)
+
+repair_wsl_registered_syslog() {
+    local rows version name port status owner data log
+    is_wsl_without_parsec || return 0
+    command -v syslog-ng >/dev/null 2>&1 || return 0
+    rows="$(pg_lsclusters --no-header)" || { warn 'WSL syslog: реестр недоступен; конфиги не изменены'; return 0; }
+    while read -r version name port status owner data log; do
+        [[ -n "$version" ]] || continue
+        repair_wsl_cluster_syslog "$version" "$name" "$data" "$log" || warn "WSL syslog: не удалось исправить ${version}/${name}"
+    done <<<"$rows"
 }
 
 confirm() {
@@ -1407,6 +1573,7 @@ EOF
     run_parsec_aware pg_createcluster "${pg_ver}" "${cls_nm}" -p "${cls_pt}" --start-conf=auto \
         -d "${data_dir}" -l "${data_log}" --createclusterconf="${create_conf}" \
         -- --auth-local=peer --auth-host="${auth_method}"
+    repair_wsl_cluster_syslog "$pg_ver" "$cls_nm" "$data_dir" "$data_log" || warn 'WSL syslog: требуется ручная проверка конфигурации'
 
     mkdir -p -- "${conf_dir}/conf.d"
     cat >>"${conf_dir}/pg_hba.conf" <<EOF
@@ -1871,6 +2038,8 @@ rename_cluster_checked() (
     rows="$(pg_lsclusters --no-header)" || die "не удалось проверить переименованный кластер; копия: ${recovery}"
     reported="$(awk -v v="${version}" -v n="${new_name}" '$1==v && $2==n {print $6}' <<<"${rows}")"
     [[ "${reported}" == "${new_data}" ]] || die "неожиданный путь после переименования: ${reported}; копия: ${recovery}"
+    new_log="$(awk -v v="$version" -v n="$new_name" '$1==v && $2==n {print $7}' <<<"$rows")"
+    repair_wsl_cluster_syslog "$version" "$new_name" "$new_data" "$new_log" "$name" || warn 'WSL syslog: требуется ручная проверка после переименования'
     service="postgresql@${version}-${new_name}.service"
     phase=service
     remove_cluster_service_files "${version}" "${new_name}" defer
@@ -3514,6 +3683,7 @@ EOF
     systemctl daemon-reload
     systemctl enable "$(basename -- "${restore_service_file}")"
     start_cluster_checked "${version}" "${restore_name}"
+    repair_wsl_registered_syslog
     cls_nm="${restore_name}"
     cls_pt="${restore_port}"
     save_config
@@ -3798,6 +3968,7 @@ main() {
         prepare_postgres_root
     fi
     STARTUP_PREPARATION=0
+    repair_wsl_registered_syslog
     if ((NON_INTERACTIVE)); then
         case "${ACTION}" in
             info) info_menu ;;

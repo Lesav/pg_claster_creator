@@ -31,3 +31,10 @@ prx-test-menu-sql.sh — test interactive SQL navigation, confirmation and targe
 prx-run-wsl-phases.sh — run sequential regression phases in an isolated per-WSL run
 prx-clean-wsl-regression.sh — clean validated run artifacts and verify the WSL baseline
 prx-test-live-install.sh — test real interactive default/custom cluster creation
+prx-bootstrap-wsl-postgres.sh — remove reviewed server packages and test workspace bootstrap
+prx-test-wsl-fixtures.sh — run isolated full-plan fixture suites per WSL
+prx-test-wsl-dependencies.sh — test real APT and dpkg dependency installation
+prx-test-live-sql.sh — exercise live SQL menu and mode-5 package deployment
+prx-test-wsl-stand.sh — run one WSL test chain with final cleanup and timing
+prx-test-wsl-syslog.sh — test guarded WSL syslog repair, parser checks and rollback in isolation
+prx-verify-wsl-test-cleanup.sh — verify final registry, processes and removal of run artifacts

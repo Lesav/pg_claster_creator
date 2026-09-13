@@ -98,7 +98,7 @@ for target in "$base/artifacts" "$base/$distro/artifacts"; do
     fi
 done
 find "$base" -type f \( -name '*.deb' -o -name '*.tar.gz' \) -print -delete
-if [[ "$distro" == alse-1.8.6 ]]; then
+if [[ "$distro" == alse-1.8.6 || "${PGCC_OFFLINE_REMOVE:-0}" == 1 ]]; then
     while IFS= read -r target; do
         [[ "$target" =~ ^/root/pg-wsl-remove\.[A-Za-z0-9]+$ && -d "$target" && ! -L "$target" ]] || continue
         [[ "$(realpath "$target")" == "$target" ]]

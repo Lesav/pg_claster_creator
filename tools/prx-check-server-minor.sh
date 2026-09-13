@@ -31,7 +31,11 @@ while IFS= read -r package; do
     [[ "$available" == yes ]] || bad=1
 done <"$logs/removal-candidates.txt"
 [[ -s "$logs/server-minors.tsv" ]] || bad=1
-dpkg-query -W -f='${binary:Package}\t${Status}\t${Version}\n' postgresql-common postgresql-client-common claster-creator >"$logs/baseline-packages.log"
+for baseline_package in postgresql-common postgresql-client-common claster-creator; do
+    if ! dpkg-query -W -f='${binary:Package}\t${Status}\t${Version}\n' "$baseline_package" 2>>"$logs/baseline-query.log"; then
+        printf '%s\tnot installed\t-\n' "$baseline_package"
+    fi
+done >"$logs/baseline-packages.log"
 mapfile -t removal_candidates <"$logs/removal-candidates.txt"
 LC_ALL=C apt-get -s remove -- "${removal_candidates[@]}" >"$logs/removal-plan.log" 2>&1 || bad=1
 dpkg --audit >"$logs/dpkg-audit.log"

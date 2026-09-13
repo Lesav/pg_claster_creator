@@ -7,6 +7,9 @@
 # Output: /root/pg-wsl-remove.XXXXXX contains originals, patched hooks and evidence.
 # Example: sudo bash prx-remove-wsl-postgres-packages.sh alse-1.8.6 --unit tantor-be-server-18.service -- tantor-be-server-18
 # No purge, autoremove, data removal, online daemon-reload or package force flags.
+# Environment: PGCC_REMOVE_RECOVERY=1 permits reviewed half-configured targets and
+#   an already pending man-db trigger after an interrupted removal; records this
+#   as recovery, never as a successful normal package removal.
 set -Eeuo pipefail
 [[ $# -ge 3 && "$EUID" == 0 ]] || exit 2
 distro="$1"; shift
@@ -22,12 +25,19 @@ shift
 [[ $# -gt 0 ]] || exit 2
 packages=("$@")
 canonical=()
+recovery="${PGCC_REMOVE_RECOVERY:-0}"; [[ "$recovery" == 0 || "$recovery" == 1 ]]
 for package in "${packages[@]}"; do
     [[ "$package" =~ ^[a-z0-9][a-z0-9+.-]*(:[a-z0-9]+)?$ ]] || exit 2
-    [[ "$(dpkg-query -W -f='${Status}' "$package")" == 'install ok installed' ]] || exit 2
+    state="$(dpkg-query -W -f='${Status}' "$package")"
+    [[ "$state" == 'install ok installed' || ( "$recovery" == 1 && "$state" == 'deinstall ok half-configured' ) ]] || exit 2
     canonical+=("$(dpkg-query -W -f='${binary:Package}' "$package")")
 done
-clusters=$(pg_lsclusters --no-header)
+if command -v pg_lsclusters >/dev/null; then
+    clusters=$(pg_lsclusters --no-header)
+elif [[ "$recovery" == 1 && -d /etc/postgresql ]]; then
+    clusters=$(find /etc/postgresql -name postgresql.conf -print)
+else exit 2
+fi
 [[ -z "$clusters" ]] || { echo 'REFUSE: clusters exist'; exit 2; }
 process_rc=0
 pgrep -a -x postgres || process_rc=$?
@@ -43,7 +53,8 @@ LC_ALL=C apt-get -s remove -- "${packages[@]}" >"$backup/apt-plan.log"
 awk '$1=="Remv" {print $2}' "$backup/apt-plan.log" | sort >"$backup/planned.txt"
 cmp "$backup/approved.txt" "$backup/planned.txt"
 dpkg --audit >"$backup/audit-before.log"
-[[ ! -s "$backup/audit-before.log" ]]
+[[ ! -s "$backup/audit-before.log" || "$recovery" == 1 ]]
+printf 'Recovery mode: %s\n' "$recovery"
 dpkg-query -W -f='${binary:Package}\t${Status}\t${Version}\n' >"$backup/packages-before.tsv"
 find / -maxdepth 1 -type f -name 'core.*' -printf '%T@ %s %p\n' | sort >"$backup/cores-before"
 awk '{print $22}' /proc/1/stat >"$backup/pid1-before"
@@ -71,7 +82,16 @@ for hook in "${hooks[@]}"; do
     sh -n "$hook"
     cp -a "$hook" "$backup/patched/"
 done
-timeout -k 5 180 env DEBIAN_FRONTEND=noninteractive apt-get -y --no-auto-remove remove -- "${packages[@]}"
+if [[ "$recovery" == 1 ]]; then
+    # Interrupted dpkg may reject APT even though its read-only plan succeeded.
+    # Exact approved targets only; dependency checks remain enabled (no force).
+    timeout -k 5 180 env DEBIAN_FRONTEND=noninteractive dpkg --remove "${packages[@]}"
+    if [[ "$(dpkg-query -W -f='${Status}' man-db 2>/dev/null || true)" == 'install ok triggers-pending' ]]; then
+        timeout -k 5 180 env DEBIAN_FRONTEND=noninteractive dpkg --triggers-only man-db
+    fi
+else
+    timeout -k 5 180 env DEBIAN_FRONTEND=noninteractive apt-get -y --no-auto-remove remove -- "${packages[@]}"
+fi
 dpkg --audit >"$backup/audit-after.log"
 [[ ! -s "$backup/audit-after.log" ]]
 dpkg-query -W -f='${binary:Package}\t${Status}\t${Version}\n' >"$backup/packages-after.tsv"
@@ -83,6 +103,10 @@ for when in before after; do
     awk -F '\t' 'NR==FNR {omit[$1]=1;next} !($1 in omit)' \
         "$backup/approved-canonical.txt" "$backup/packages-$when.tsv" >"$backup/other-$when.tsv"
 done
+if [[ "$recovery" == 1 ]]; then
+    # Only this known pending trigger may finish alongside the reviewed removal.
+    sed -i 's/^man-db\tinstall ok triggers-pending\t/man-db\tinstall ok installed\t/' "$backup/other-before.tsv"
+fi
 cmp "$backup/other-before.tsv" "$backup/other-after.tsv"
 awk '{print $22}' /proc/1/stat >"$backup/pid1-after"
 readlink /proc/1/ns/pid >"$backup/namespace-after"

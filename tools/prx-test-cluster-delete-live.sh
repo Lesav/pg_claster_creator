@@ -7,6 +7,8 @@
 # Rename variant also checks SQL, state, effective paths and autostart links;
 # the down fixture uses a fixed custom data path which rename must preserve.
 # Output: per-WSL logs; no installed scripts/config changes; preserves pre-existing clusters.
+# Native fixture creation uses the portable C locale; quoted host LANG is not
+# a product failure and must not prevent preparation of the disposable cluster.
 # Example: PGCC_DELETE_LOG_ROOT=/repo/tmp/delete bash tools/prx-test-cluster-delete-live.sh /repo Astra 18 58210 /var/lib/postgresql/tantor-be-18
 set -Eeuo pipefail
 repo="$1"; distro="$2"; v="$3"; port="$4"; default_root="$5"
@@ -42,7 +44,7 @@ for scenario in online down; do
     [[ ! -e "$data" && ! -L "$data" && ! -e "$conf" && ! -L "$conf" ]]
     [[ ! -e "$unit" && ! -L "$unit" && ! -e "/etc/systemd/system/$service" ]]
     printf 'CREATE scenario=%s version=%s name=%s port=%s data=%s\n' "$scenario" "$v" "$name" "$port" "$data"
-    timeout -k 5 120 pg_createcluster "$v" "$name" --port "$port" --datadir "$data" --logfile "$log" --start-conf=manual --createclusterconf=/dev/null
+    timeout -k 5 120 env LC_ALL=C LANG=C pg_createcluster "$v" "$name" --port "$port" --datadir "$data" --logfile "$log" --start-conf=manual --createclusterconf=/dev/null
     write_cluster_unit_file "$unit" "$v" "$name" "$data"
     fi
     # Older postgresql-common defaults inject a setting removed in PostgreSQL 15.
