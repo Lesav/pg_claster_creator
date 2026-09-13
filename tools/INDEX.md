@@ -38,3 +38,5 @@ prx-test-live-sql.sh — exercise live SQL menu and mode-5 package deployment
 prx-test-wsl-stand.sh — run one WSL test chain with final cleanup and timing
 prx-test-wsl-syslog.sh — test guarded WSL syslog repair, parser checks and rollback in isolation
 prx-verify-wsl-test-cleanup.sh — verify final registry, processes and removal of run artifacts
+prx-test-live-config-env.sh — verify live config propagation, cron and fresh DEB data roots
+prx-run-live-config-env.sh — run isolated live config checks with timing and cleanup
