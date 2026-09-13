@@ -10,6 +10,9 @@
 #   CI_JOB_TOKEN is required and is never accepted as a CLI argument or printed.
 # Example: python3 tools/prx-publish-gitflic-release.py --artifact dist/package.deb --notes CHANGELOG.md
 # Safety: No tag moves, release/file deletions, overwrites or HTTP redirects; retries reuse matching files.
+# Diagnostics: GitFlic 4.5.0 may reject DEB media types (415) or release creation
+#   with CI_JOB_TOKEN (500). Report sanitized exception types; never bypass the
+#   server media policy or silently replace job authentication with a personal token.
 import argparse
 import hashlib
 import json
@@ -72,7 +75,20 @@ class Client:
                 return response.read()
         except urllib.error.HTTPError as error:
             # Do not echo response bodies, headers or token-bearing request objects.
-            raise RuntimeError(f"GitFlic API HTTP {error.code}; request was not retried") from None
+            kind = "unknown"
+            hint = ""
+            try:
+                diagnostic = json.loads(error.read(65536))
+                candidate = diagnostic.get("type", "")
+                if isinstance(candidate, str) and re.fullmatch(r"[a-zA-Z0-9._-]{1,180}", candidate):
+                    kind = candidate
+                if error.code == 415 and "application/x-debian-package" in str(diagnostic.get("detail", "")):
+                    hint = "; server rejects application/x-debian-package: ask the GitFlic administrator to review allowed release file types"
+            except (ValueError, TypeError, AttributeError):
+                pass
+            # Even a syntactically safe server value must not disclose our token.
+            kind = kind.replace(self.token, "[REDACTED]")
+            raise RuntimeError(f"GitFlic API {req.get_method()} HTTP {error.code} ({kind}){hint}; request was not retried") from None
         except urllib.error.URLError:
             raise RuntimeError("GitFlic API connection failed; request was not retried") from None
 

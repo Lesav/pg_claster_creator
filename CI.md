@@ -47,6 +47,31 @@ available; `PGCC_CFG` from the host is intentionally not inherited by the build.
 
 ## Release procedure
 
+### Current self-hosted verification status (2026-09-13)
+
+The dedicated `a186-ci-cd` runner builds and uploads job artifacts successfully.
+End-to-end automatic releases on `gf.icd.nikiet.ru` **are not yet operational**:
+
+- A tag push does not automatically create a tag pipeline on the tested 4.5.0
+  installation. Starting from the tag's UI works; REST pipeline start using
+  `CI_JOB_TOKEN` returns 403. Do not grant broader token permissions implicitly.
+- Release creation using `CI_JOB_TOKEN` returns 500 with
+  `org.springframework.dao.InvalidDataAccessApiUsageException.type`; the exact
+  server-side cause needs the administrator's logs.
+- Release upload rejects the original DEB with 415 and explicitly identifies
+  `application/x-debian-package` as unsupported. The administrator must review
+  the allowed release file types; disguising the file or changing the client's
+  declared Content-Type is not a fix.
+- The original job artifact was downloaded and its DEB checksum verified against
+  its SHA256SUMS, but **release attachment download verification is blocked**:
+  there is no successfully uploaded release DEB yet.
+
+See [runner setup and diagnostic evidence](tools/gitflic-ci-cd.md#7-теги-и-публикация-известные-ограничения).
+The offline publisher tests run before CI builds; they do not replace this
+integration check.
+
+### Procedure after resolving the server blockers
+
 1. Update the three script versions, six man-page headers, README examples and
    changelogs. Preserve old journal filenames and their actual test scope.
 2. Commit reviewed source changes. Keep `master` and the relevant `release/X.x`
