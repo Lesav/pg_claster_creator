@@ -1,493 +1,494 @@
-# История изменений
+# Changelog
 
-Все существенные изменения проекта фиксируются в этом файле.
+All significant project changes are recorded in this file.
+
+[Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
+
+## Unreleased
+
+- Adopted the MIT License, copyright 2026 Andrei Lesnykh; added license notices to the three main scripts and both READMEs.
+- All DEB modes now require and include LICENSE beside the installed scripts and as `/usr/share/doc/claster-creator/copyright`. The release-build helper stages and verifies both copies. Cluster-management logic is unchanged.
 
 ## 2.5.3 — 2026-09-13
 
-- Исправление syslog-ng предназначено специально для тестирования функционала проекта на WSL без PARSEC. На реальных машинах — физических серверах и обычных виртуальных машинах вне WSL — оно не задействуется и не изменяет настройки syslog-ng или аудита Astra.
-- В create-claster.sh добавлено адресное исправление штатных syslog-ng конфигов Astra на WSL без PARSEC: при отсутствующих pgN_kv_parser/pgN_audit_parser используется зарегистрированный log-файл и отдельный raw-журнал, без имитации структурированного аудита Astra. Исходник сохраняется; проверка синтаксиса ограничена по времени, при ошибке — откат. Рабочие/пользовательские конфиги и обычные Linux-системы не изменяются. Автоматического reload/restart и изменения CapabilitiesParsec нет. Английский header содержит симптомы и порядок диагностики.
-- Новых CLI/ENV-аргументов нет; usage и Command-line options / Environment interface сохраняют действующий контракт. Версии трёх сценариев и MAN согласованы; уточнены README и программа испытаний.
-- Сохранён фактический журнал TEST-2.5.2-journal.md: 32 ID подтверждены полностью, у 27 остались непроверенные варианты с причинами. Пропуски не считаются FAIL и не подтверждают PASS; неполный прогон без ошибок сохраняет имя без суффикса. Это не полный passed для 2.5.3.
-- Закреплены helper-ы параллельных WSL-проверок, восстановления пакетов и контроля очистки. Пакет 2.5.3 включает все обычные корневые Markdown-файлы, без tests/, с прежним конфигом дистрибутива и gzip-сжатием для старых Astra.
+- The syslog-ng fix is specifically intended for testing project functionality on WSL without PARSEC. It is inactive on physical servers and ordinary virtual machines outside WSL and does not change their syslog-ng or Astra audit settings.
+- Added a targeted fix in create-claster.sh for stock Astra syslog-ng configurations on WSL without PARSEC: when pgN_kv_parser/pgN_audit_parser are missing, it uses the registered log file and a separate raw log without emulating structured Astra auditing. The original is preserved; syntax validation has a timeout and failures trigger rollback. Working/custom configurations and ordinary Linux systems are unchanged. No automatic reload/restart or CapabilitiesParsec change is performed. The English header documents symptoms and diagnostic steps.
+- No new CLI/ENV arguments; usage and the Command-line options / Environment interface retain the existing contract. Versions of all three scripts and MAN pages are aligned; README and the test program have been clarified.
+- Preserved the actual TEST-2.5.2-journal.md report: 32 IDs fully confirmed, with untested variants and reasons remaining for 27. Omissions are neither FAIL nor proof of PASS; an incomplete run without errors retains a filename without a status suffix. This is not a full passed result for 2.5.3.
+- Retained reusable helpers for parallel WSL checks, package restoration, and cleanup verification. Package 2.5.3 includes all regular root-level Markdown files, excludes tests/, and retains the previous distribution configuration and gzip compression for older Astra versions.
 
 ## 2.5.2 — 2026-09-13
 
-- Перед остановкой кластера и штатной службы выводится уведомление в stderr; интерактивные подтверждения заранее сообщают об остановке, CLI/cleanup/postinst не получают дополнительных запросов ввода.
-- Обновлён полный план: 59 обязательных ID, ENV/конфиги/major-имя/уведомления, время каждого WSL и общее время. Выпуск проверяется точечно на Mint и Astra 1.8.6, без заявления полного passed-прогона и без установки пакета на стенды.
+- A notification is written to stderr before stopping a cluster or its stock service. Interactive confirmations warn about the stop in advance; CLI/cleanup/postinst calls receive no additional input prompts.
+- Updated the full plan: 59 mandatory IDs, ENV/configuration/major-name/notification coverage, per-WSL duration, and total duration. The release receives targeted checks on Mint and Astra 1.8.6, without claiming a full passed run or installing the package on the test systems.
 
-- Добавлены ENV-зеркала всех функциональных аргументов builder и backup-wrapper: CLI > непустая ENV > конфиг/дефолт, в том числе PGCC_SQL_FILE, PGCC_MODE, PGCC_DEPENDS, PGCC_OUTPUT_DIR, PGCC_INTERACTIVE/PGCC_FORCE и параметры цели/ротации wrapper. Существующие ENV-входы основного сценария и новые входы wrapper сохраняются при собственном sudo-перезапуске. PGCC_CRON выбирает прежний интерактивный диалог cron. Новых CLI-действий SQL/rename/start/stop нет.
+- Added ENV equivalents for all functional builder and backup-wrapper arguments: CLI > nonempty ENV > configuration/default, including PGCC_SQL_FILE, PGCC_MODE, PGCC_DEPENDS, PGCC_OUTPUT_DIR, PGCC_INTERACTIVE/PGCC_FORCE, and wrapper target/retention parameters. Existing main-script ENV inputs and new wrapper inputs survive the scripts' own sudo re-execution. PGCC_CRON selects the existing interactive cron dialog. No new CLI actions for SQL/rename/start/stop were added.
 
-- Исправлена общая проверка cold restore/rename: занятость определяется парой major/имя, одинаковые имена разных major разрешены при отсутствии реальных конфликтов путей, службы и порта.
-- Во всех трёх сценариях добавлены PGCC_CFG и --config FILE/--config=FILE: CLI > ENV > системный > локальный конфиг. Явный файл обязателен, без fallback при ошибке; относительный путь отсчитывается от каталога запуска. Выбор сохраняется при sudo, в cron wrapper и last.sh сборщика; выбранный конфиг включается в DEB без переноса пути машины сборки в postinst. Обновлены usage, английские headers, README, man и план тестирования. Собран dist/claster-creator-2.5.2.deb с прежним конфигом дистрибутива из Git.
+- Fixed the shared cold restore/rename check: conflicts are identified by the major/name pair. Identical names across different majors are allowed unless actual path, service, or port conflicts exist.
+- Added PGCC_CFG and --config FILE/--config=FILE to all three scripts: CLI > ENV > system > local configuration. An explicitly selected file is required, with no fallback on error; relative paths start at the invocation directory. Selection survives sudo, wrapper cron jobs, and the builder's last.sh. The selected configuration is embedded in the DEB without carrying the build-host path into postinst. Updated usage, English headers, README, man pages, and the test plan. Built dist/claster-creator-2.5.2.deb with the previous distribution configuration from Git.
 
-- В корне оставлены последний полный журнал 2.5.1 (fail) и отчёт выпуска 2.5.2; более старые журналы перенесены в локальный игнорируемый tests и удалены из индекса Git. История коммитов и ранее выпущенные DEB не переписываются.
-- Во всех пяти режимах create-claster-deb.sh включает все обычные .md из своего корня (0644), без рекурсии в tests и без обхода ссылок. Убрана обязательная привязка к passed-журналу 2.1.2; обновлены справка, man и проверки состава пакета.
+- Kept the latest full journal, 2.5.1 (fail), and the 2.5.2 release report in the root. Older journals were moved to the local ignored tests directory and removed from the Git index. Commit history and previously released DEBs are not rewritten.
+- In all five modes, create-claster-deb.sh includes every regular root-level .md file with mode 0644, without recursing into tests or following links. Removed the mandatory dependency on the 2.1.2 passed journal; updated help, man pages, and package-content checks.
 
 ## 2.5.1 — 2026-09-12
 
-- Patch подготовленного выпуска 2.5.0: перед сборкой уточнены usage, Command-line options и Environment interface трёх сценариев. Основной сценарий выполняет SQL только интерактивно; сборщик принимает --sql-file в режиме 5, но не SQL_FILE/PGCC_SQL_FILE из окружения. Wrapper SQL не выполняет и не предоставляет собственных ENV-аналогов аргументов.
-- Уточнены область действия CLASTER_FORCE_INSTALL/CLASTER_FORCE_DB_INSTALL (postinst, не сборка) и приоритет CLI/ENV/конфига основного сценария. Новых CLI/ENV-действий в этом patch нет, исполняемая логика операций по сравнению с подготовленной 2.5.0 не изменена.
-- Согласованы версии, README, TEST и man. Пакет dist/claster-creator-2.5.1.deb использует gzip и прежний конфиг из Git; пользовательская локальная правка конфига не включается. Полный passed-прогон новым выпуском не заявляется.
+- Patch to the prepared 2.5.0 release: clarified usage, Command-line options, and Environment interface for all three scripts before building. The main script executes SQL interactively only; the builder accepts --sql-file in mode 5, but not SQL_FILE/PGCC_SQL_FILE from the environment. The wrapper neither executes SQL nor provides its own ENV equivalents for arguments.
+- Clarified the scope of CLASTER_FORCE_INSTALL/CLASTER_FORCE_DB_INSTALL (postinst, not build time) and the main script's CLI/ENV/configuration precedence. This patch adds no CLI/ENV actions and does not change executable operation logic compared with the prepared 2.5.0 version.
+- Aligned versions, README, TEST, and man pages. Package dist/claster-creator-2.5.1.deb uses gzip and the previous configuration from Git; the user's local configuration edit is excluded. The new release does not claim a full passed test run.
 
-## 2.5.0 — 2026-09-12 (подготовленный minor-выпуск)
+## 2.5.0 — 2026-09-12 (prepared minor release)
 
-- Vanilla PostgreSQL: серверы Debian/Ubuntu/Mint `postgresql-N` распознаются наряду с `postgresql-N-server`; client/contrib/meta/dev/extension не попадают в список серверов. Приоритет: SE/Enterprise → BE → Free/PostgreSQL; vanilla и Tantor Free имеют одинаковый приоритет, явный выбор пакета имеет преимущество. Метаданные бэкапа берут пакет-владелец postgres, а не выдуманное имя с -server; DEB выбирает фактический формат и фиксирует major. На Mint сервер предоставляет versioned contrib, поэтому метапакет postgresql-contrib не добавляется. Проверены реальный APT и пробный DEB без установки сервера.
-- Основной сценарий: «Изменить → 4 — Выполнить SQL» для выбранной существующей БД, номер/путь .sql, пошаговый возврат 0, отказ по умолчанию и проверка цели после подтверждения. Вывод psql сохранён до Enter, ON_ERROR_STOP прекращает выполнение при ошибке. Добавлена обязательная проверка PT-CC-26.
-- Сборщик: режим 5 создаёт кластер и БД и применяет встроенный `.sql`; интерактивный выбор номера из backup-dir или относительного/абсолютного пути, CLI `--sql-file`, воспроизводимый last.sh и отдельное имя `*-sql.deb`.
-- В списке режима 3 теперь только холодные архивы, режима 4 — только горячие дампы. Названия пунктов меню начинаются с «Установка сценариев».
-- SQL выполняется при установке от postgres с ON_ERROR_STOP, без автоматического повторения после сбоя. Маркеры и CLASTER_FORCE_INSTALL охватывают режим 5; CLASTER_FORCE_DB_INSTALL для него запрещён. План полного тестирования дополнен обязательной проверкой PT-DEB-17.
-- Minor-выпуск объединяет SQL из меню, SQL-режим DEB и поддержку vanilla. Согласованы версии трёх сценариев, usage и man; `dist/claster-creator-2.5.0.deb` сохраняет gzip control/data и обязательный исторический журнал 2.1.2. Точечные проверки не заменяют полный план: нового полного passed-журнала нет.
+- Vanilla PostgreSQL: Debian/Ubuntu/Mint `postgresql-N` servers are recognized alongside `postgresql-N-server`; client/contrib/meta/dev/extension packages are excluded from server lists. Priority: SE/Enterprise → BE → Free/PostgreSQL; vanilla and Tantor Free have equal priority, and explicit package selection takes precedence. Backup metadata uses the package owning postgres, not a fabricated name ending in -server; DEBs select the actual naming format and pin the major. On Mint, the server provides versioned contrib, so the postgresql-contrib metapackage is not added. Checked real APT behavior and a trial DEB without installing the server.
+- Main script: “Edit → 4 — Execute SQL” for a selected existing database, .sql selection by number/path, step-by-step return with 0, rejection by default, and target revalidation after confirmation. psql output remains visible until Enter; ON_ERROR_STOP stops execution on error. Added mandatory check PT-CC-26.
+- Builder: mode 5 creates a cluster and database and applies an embedded `.sql` file; interactive selection by number from backup-dir or by relative/absolute path, CLI `--sql-file`, a reproducible last.sh, and a distinct `*-sql.deb` name.
+- Mode 3 now lists cold archives only; mode 4 lists hot dumps only. Menu item labels begin with “Install scripts”.
+- At installation, SQL runs as postgres with ON_ERROR_STOP and is not replayed automatically after failure. Markers and CLASTER_FORCE_INSTALL cover mode 5; CLASTER_FORCE_DB_INSTALL is forbidden for this mode. Added mandatory check PT-DEB-17 to the full test plan.
+- This minor release combines menu-based SQL, SQL deployment DEBs, and vanilla support. Aligned the three script versions, usage, and man pages; `dist/claster-creator-2.5.0.deb` retains gzip control/data archives and the mandatory historical 2.1.2 journal. Targeted checks do not replace the full plan: no new full passed journal exists.
 
 ## 2.4.3 — 2026-09-12
 
-- Исправлена очистка экрана create-claster.sh: только stdout TTY с непустым TERM, отличным от dumb/unknown; перенаправленный вывод не содержит команд clear, предупреждения сохраняются.
-- После распаковки холодного архива, до запуска кластера, /var/log/postgresql получает root:postgres и 1775 без рекурсивного изменения файлов. Ошибка mkdir/chown/chmod или символьная ссылка вместо самого каталога прекращает restore с диагностикой. Это не общая фильтрация прав всех родителей архива.
-- Закреплены тестовые проверки состава/метаданных legacy-архива и отказ от ошибочно перепакованного дерева общих родителей. Сохранена проверка EXIT trap, расширены CLI/ENV/позиционные отрицательные тесты. Эти проверки не заменяют полный живой прогон S01–S10.
-- Согласованы версии трёх сценариев, usage и шести man-страниц; дистрибутив `dist/claster-creator-2.4.3.deb` сохраняет gzip для совместимости с Astra 1.6/1.7 и исторический журнал 2.1.2. Точечные проверки описаны в `TEST-2.4.2-fixes-regression.md`; полного passed-прогона нового функционала нет.
+- Fixed screen clearing in create-claster.sh: only when stdout is a TTY and TERM is nonempty and neither dumb nor unknown. Redirected output contains no clear commands; warnings are preserved.
+- After extracting a cold archive and before starting the cluster, /var/log/postgresql is set to root:postgres and 1775 without recursively changing files. A mkdir/chown/chmod failure or a symlink in place of the directory aborts restore with diagnostics. This is not general permission filtering for every parent directory in an archive.
+- Retained tests for legacy archive contents/metadata and rejection of an incorrectly repacked tree containing shared parent directories. Preserved the EXIT trap check and expanded CLI/ENV/positional negative tests. These checks do not replace the full live S01–S10 run.
+- Aligned the three script versions, usage, and six man pages; `dist/claster-creator-2.4.3.deb` retains gzip for Astra 1.6/1.7 compatibility and the historical 2.1.2 journal. Targeted checks are documented in `TEST-2.4.2-fixes-regression.md`; there is no full passed run for the new functionality.
 
 ## 2.4.2 — 2026-09-12
 
-Patch-выпуск для публикации исправлений 2.4.1. По сравнению с проверенной рабочей версией 2.4.1 исполняемая логика трёх сценариев не изменена: обновлены номер версии, документация и DEB.
+Patch release publishing the 2.4.1 fixes. Compared with the tested working version 2.4.1, executable logic in all three scripts is unchanged: only the version number, documentation, and DEB were updated.
 
-- Сохранены исправления переименования, проверка эффективных путей, перенос log/autostart-ссылок и диагностика частичного отказа. Точечная регрессия `TEST-2.4.1-rename-regression.md` применима к неизменённому функционалу 2.4.2, но не заменяет полный план S01–S10 и не закрывает BLOCKED-пункты журнала 2.4.0.
-- Согласованы версии трёх сценариев и шести man-страниц, usage использует текущую версию. План полного тестирования сохраняет расширенные проверки PT-CC-25: prefix/reverse, native-like fixture, эффективные пути, log, состояния/autostart и отказы.
-- Дистрибутив `dist/claster-creator-2.4.2.deb` использует gzip для control/data и включает обязательный исторический passed-журнал 2.1.2. Нового полного passed-журнала нет.
+- Preserved rename fixes, effective-path validation, log/autostart link relocation, and partial-failure diagnostics. The targeted regression in `TEST-2.4.1-rename-regression.md` applies to the unchanged 2.4.2 functionality, but does not replace the full S01–S10 plan or close BLOCKED items in the 2.4.0 journal.
+- Aligned the three script versions and six man pages; usage displays the current version. The full test plan retains expanded PT-CC-25 checks: prefix/reverse, a native-like fixture, effective paths, log handling, states/autostart, and failures.
+- Distribution package `dist/claster-creator-2.4.2.deb` uses gzip for control/data and includes the mandatory historical 2.1.2 passed journal. No new full passed journal exists.
 
 ## 2.4.1 — 2026-09-12
 
-Patch-выпуск исправляет переименование по результатам `TEST-2.4.0-journal-fail.md`. Исторические passed-журналы не подтверждают эти изменения; отдельная регрессия описана в `TEST-2.4.1-rename-regression.md`.
+Patch release fixing rename issues identified in `TEST-2.4.0-journal-fail.md`. Historical passed journals do not validate these changes; a separate regression is documented in `TEST-2.4.1-rename-regression.md`.
 
-- Исключена повторная замена уже обновлённых `pg_renamecluster` путей при `old → old_suffix`. Общая функция замены для restore/move-data не изменялась.
-- Перед переименованием подтверждается останов реальным `pg_ctl status`; перед запуском проверяются эффективные data/HBA/ident. Обновляется стандартная ссылка `config/log`, которую штатный helper мог оставить на старое имя.
-- Переименование не вызывает `systemctl enable/disable`; сохраняет и переносит persistent/runtime Wants/Requires. Перезагрузка systemd внутри штатного helper отключена только для этого дочернего вызова; один ограниченный по времени reload выполняется после подготовки конфигурации и unit. На всех семи WSL прежний сбой systemd при rename не повторился.
-- Ошибка сообщает этап, код и recovery manifest; конфигурация, unit и vendor-настройки сохраняются без копирования БД и без автоматического отката.
-- Mock-тест теперь воспроизводит обновление путей штатным helper, проверяет prefix/reverse, повторное применение, состояния, автозапуск и шесть отказов. Живые проверки: 28 переименований и 14 удалений на семи Astra WSL. Полный план с BLOCKED-вариантами ещё не закрыт.
-- Версии трёх сценариев, usage/man и документация согласованы; CLI и формат бэкапов не изменены. DEB сохраняет gzip и обязательный исторический журнал 2.1.2.
+- Prevented repeated replacement of paths already updated by `pg_renamecluster` for `old → old_suffix`. The shared restore/move-data replacement function is unchanged.
+- Before renaming, the stopped state is confirmed by an actual `pg_ctl status`; effective data/HBA/ident paths are checked before startup. The standard `config/log` link is updated when the native helper leaves it pointing to the old name.
+- Rename does not call `systemctl enable/disable`; persistent/runtime Wants/Requires links are preserved and relocated. The native helper's systemd reload is disabled only for that child invocation; one bounded reload runs after preparing the configuration and unit. The previous systemd rename failure did not recur on any of the seven WSL systems.
+- Failures report the stage, exit code, and recovery manifest; configuration, units, and vendor settings are preserved without copying the database or performing automatic rollback.
+- The mock test now reproduces native-helper path updates and checks prefix/reverse renames, repeated application, states, autostart, and six failure cases. Live checks: 28 renames and 14 deletions on seven Astra WSL systems. The full plan, including BLOCKED variants, remains incomplete.
+- Aligned the three script versions, usage/man pages, and documentation; CLI and backup formats are unchanged. The DEB retains gzip and the mandatory historical 2.1.2 journal.
 
 ## 2.4.0 — 2026-09-12
 
-Minor-выпуск меняет удаление кластера для всех поддерживаемых семейств. Исторический passed-журнал 2.1.2 не подтверждает новый функционал; точечная регрессия и ограничения покрытия приведены в TEST.md.
+Minor release changing cluster deletion for all supported families. The historical 2.1.2 passed journal does not validate the new functionality; targeted regression results and coverage limits are documented in TEST.md.
 
-- PostgreSQL/Postgres Pro/Tantor удаляются без `pg_dropcluster`: остановка с проверкой процесса и systemd, затем точечное удаление данных, конфигурации, службы и ссылок. `syslog-ng-ctl reload` и `systemctl disable` не вызываются; обращения к службам ограничены по времени. Конфиг syslog-ng удаляется, но применяется при следующей штатной перезагрузке его конфигурации.
-- Небезопасные пути, отсутствие PG_VERSION, пересечения с данными соседних кластеров и вложенные mount points запрещают удаление. Внешние цели ссылок и общие/нестандартные журналы сохраняются; DEB force-install вызывает ту же процедуру.
-- Полный план объединён в 10 сценариев: прежние 55 ID сохранены, остановка/запуск и переименование добавлены отдельно (57 контрольных точек). Повторно используются архивы/пакеты и доказательства, но матрица совместимости не сокращена; подготовка стендов не требует снимков.
-- Три сценария, usage/man и документация согласованы с версией 2.4.0. DEB по-прежнему использует gzip для совместимости с Astra 1.6/1.7.
+- PostgreSQL/Postgres Pro/Tantor clusters are deleted without `pg_dropcluster`: stop with process and systemd verification, then remove the specific data, configuration, service, and links. Neither `syslog-ng-ctl reload` nor `systemctl disable` is called; service calls have timeouts. The syslog-ng configuration is removed, with the change taking effect at its next normal configuration reload.
+- Unsafe paths, a missing PG_VERSION, overlaps with neighboring cluster data, and nested mount points prevent deletion. External symlink targets and shared/nonstandard logs are preserved; DEB force-install uses the same procedure.
+- Consolidated the full plan into 10 scenarios: retained the previous 55 IDs and added stop/start and rename separately, for 57 checkpoints. Archives/packages and evidence are reused without reducing the compatibility matrix; test-system preparation requires no snapshots.
+- Aligned all three scripts, usage/man pages, and documentation with version 2.4.0. DEBs continue to use gzip for Astra 1.6/1.7 compatibility.
 
 ## 2.3.5 — 2026-09-12
 
-Patch-выпуск меняет только обработку ввода при выборе серверного пакета. Приоритеты редакций, конфиг и операции с кластерами не изменены. Исторический журнал 2.1.2 сохранён; проверки текущего исправления приведены в TEST.md.
+Patch release changing only input handling during server-package selection. Edition priorities, configuration, and cluster operations are unchanged. The historical 2.1.2 journal is retained; checks for this fix are documented in TEST.md.
 
-- Выбор серверного пакета завершает сценарий при `0`, пустом/неверном вводе или EOF без повторного показа списка. Некорректный ввод не передаётся в арифметические выражения; корректный выбор и приоритеты сохранены.
+- Server-package selection exits on `0`, empty/invalid input, or EOF without redisplaying the list. Invalid input is not passed to arithmetic expressions; valid selection and priorities are preserved.
 
 ## 2.3.4 — 2026-09-12
 
-Patch-выпуск уточняет показ выбранного сервера и исправляет очистку временных каталогов сборщика. Операции управления кластерами, приоритеты выбора сервера и CLI не изменены. Исторический passed-журнал 2.1.2 сохранён без изменений и не подтверждает новые исправления; текущие проверки описаны в TEST.md.
+Patch release clarifying the selected-server display and fixing builder temporary-directory cleanup. Cluster-management operations, server-selection priorities, and CLI are unchanged. The historical 2.1.2 passed journal is retained unchanged and does not validate the new fixes; current checks are documented in TEST.md.
 
-- Сборщик удаляет родительский `tmp`, только если сам создал его в текущем запуске и после очистки он пуст. Существовавшие ранее каталоги и посторонние файлы сохраняются, в том числе при ошибке сборки.
+- The builder removes the parent `tmp` directory only if it created it during the current run and it is empty after cleanup. Pre-existing directories and unrelated files are preserved, including on build failure.
 
-- Заголовок главного меню показывает только текущий выбранный серверный пакет для создания кластера, а не все установленные серверы. Выбор по конфигу и приоритеты не изменены.
+- The main menu heading displays only the currently selected server package for cluster creation, not every installed server. Configuration-based selection and priorities are unchanged.
 
 ## 2.3.3 — 2026-09-12
 
-Patch-выпуск исправляет совместимость упаковки со старым dpkg и дополняет заголовок меню. Операции управления кластерами и CLI не изменены. Исторический журнал 2.1.2 сохраняется без изменений; проверки текущего выпуска описаны в TEST.md.
+Patch release fixing packaging compatibility with older dpkg and extending the menu heading. Cluster-management operations and CLI are unchanged. The historical 2.1.2 journal is retained unchanged; checks for this release are documented in TEST.md.
 
-- Заголовок главного меню показывает установленные серверные пакеты PostgreSQL/Postgres Pro/Tantor с версиями. Список обновляется при возврате в меню; клиентские и удалённые пакеты не показываются. Выбор сервера и его приоритеты не изменены.
+- The main menu heading displays installed PostgreSQL/Postgres Pro/Tantor server packages and versions. The list refreshes when returning to the menu; client and removed packages are not shown. Server selection and priorities are unchanged.
 
-- Исправлена совместимость DEB с `dpkg` Astra 1.6/1.7: сборщик явно использует gzip для `control.tar` и `data.tar` во всех режимах, включая запуск через fakeroot. Настройки сжатия современной системы сборки больше не приводят к созданию нечитаемого `control.tar.zst`. Логика управления кластерами не изменена.
+- Fixed DEB compatibility with Astra 1.6/1.7 `dpkg`: the builder explicitly uses gzip for `control.tar` and `data.tar` in all modes, including fakeroot runs. Modern build-host compression defaults no longer produce unreadable `control.tar.zst` archives. Cluster-management logic is unchanged.
 
 ## 2.3.2 — 2026-09-11
 
-Patch-выпуск меняет только организацию интерактивного меню, версии и документацию. Сами операции управления кластерами и неинтерактивный интерфейс сохранены. Исторический журнал 2.1.2 не покрывает новые возможности серии 2.3.x; текущие проверки описаны в TEST.md.
+Patch release changing only interactive menu organization, versions, and documentation. Cluster-management operations and the non-interactive interface are preserved. The historical 2.1.2 journal does not cover new 2.3.x features; current checks are documented in TEST.md.
 
-- Переименование, переключение порта и перенос данных сгруппированы в подменю `4 — Кластер: Изменить` с пунктами 1–3 и возвратом через 0. Главное меню: бэкап — 5, рестори — 6, удаление — 7. Логика операций и CLI не изменены.
+- Grouped rename, port switching, and data relocation under submenu “4 — Cluster: Edit”, with items 1–3 and return via 0. Main menu numbering: backup — 5, restore — 6, delete — 7. Operation logic and CLI are unchanged.
 
 ## 2.3.1 — 2026-09-11
 
-Patch-выпуск исправляет проверку конфликтов при переименовании. Это изменение поведения, а не только упаковки; исторический журнал 2.1.2 не подтверждает данное исправление.
+Patch release fixing rename conflict checks. This changes behavior, not just packaging; the historical 2.1.2 journal does not validate the fix.
 
-- Переименование не блокируется оставшимся unit-файлом незарегистрированного кластера, если служба inactive/failed и MainPID=0. Целевые unit-файлы и ссылки сохраняются в страховочную копию, затем заменяются после подтверждения операции. Работающая/переходная служба, ошибка проверки состояния, существующая конфигурация или данные остаются препятствием.
+- Rename is no longer blocked by a leftover unit file for an unregistered cluster when the service is inactive/failed and MainPID=0. Target unit files and links are backed up, then replaced after confirmation. A running/transitional service, a state-check failure, or existing configuration/data still blocks the operation.
 
 ## 2.3.0 — 2026-09-11
 
-Minor-выпуск: управление состоянием и переименование кластеров, исправления холодного restore и навигации сборщика. Исторический passed-журнал 2.1.2 не подтверждает новые возможности; фактический объём проверок и ограничения приведены в TEST.md.
+Minor release adding cluster state management and renaming, and fixing cold restore and builder navigation. The historical 2.1.2 passed journal does not validate the new features; actual check coverage and limits are documented in TEST.md.
 
-- Добавлен пункт `3 — Кластер: Остановить/Запустить`: выбор кластера по имени/номеру, автоматическое предложение остановки для online или запуска для down и подтверждение `y/N` с отказом по умолчанию. После подтверждения состояние перепроверяется без подмены подтверждённого действия. Переименование перенесено на пункт 4, удаление — на пункт 9.
+- Added “3 — Cluster: Stop/Start”: select a cluster by name/number, automatically offer stop for online or start for down, and request `y/N` confirmation with rejection by default. State is rechecked after confirmation without substituting a different action. Rename moved to item 4 and delete to item 9.
 
-- В главное меню добавлен пункт `4 — Кластер: Переименовать`. Проверяются синтаксис нового имени и его уникальность среди всех версий, конфликты путей; после подтверждения выполняются остановка, `pg_renamecluster`, согласование конфигурации и unit-файлов. Состояние online/offline и автозапуск сохраняются. Конфигурация и прежние unit-файлы сохраняются отдельно; имена БД/ролей и внешние cron-задания не меняются.
+- Added “4 — Cluster: Rename” to the main menu. Validates new-name syntax, uniqueness across all versions, and path conflicts; after confirmation, stops the cluster, runs `pg_renamecluster`, and reconciles configuration and unit files. Online/offline state and autostart are preserved. Configuration and old unit files are saved separately; database/role names and external cron jobs are unchanged.
 
-- Мастер сборки DEB очищает терминал между шагами; подменю содержат `0 — Назад`. Неверный ввод возвращает на предыдущий шаг, в главном меню — завершает работу. Enter принимает показанное значение по умолчанию; EOF отменяет сборку без зацикливания.
+- The DEB build wizard clears the terminal between steps; submenus include “0 — Back”. Invalid input returns to the previous step or exits at the main menu. Enter accepts the displayed default; EOF cancels the build without looping.
 
-- Холодный restore заменяет исторический стандартный корень данных на корень семейства и версии серверного пакета из архива: например, `tantor-free-16/subsys` → `tantor-be-18/smsn`. Пользовательские корни сохраняются. Распаковка, конфигурация и план сборщика DEB используют новый путь.
+- Cold restore replaces a historical standard data root with the root for the server package family/version recorded in the archive, for example `tantor-free-16/subsys` → `tantor-be-18/smsn`. Custom roots are preserved. Extraction, configuration, and the DEB builder's plan use the new path.
 
-- При холодном restore имя проверяется среди всех зарегистрированных кластеров, независимо от основной версии PostgreSQL. Ошибка получения списка кластеров блокирует операцию, а не считается свободным именем.
+- During cold restore, the name is checked against all registered clusters, regardless of PostgreSQL major version. Failure to obtain the cluster list blocks the operation rather than treating the name as available.
 
-- Холодный restore не блокируется битым служебным симлинком `/.postgres/systemd/postgresql@VERSION-CLUSTER.service` или копиями из `systemd/save`. Старый локальный кеш не используется как источник unit-файла; сохранённый unit берётся только из выбранного архива либо создаётся заново. Кеш обновляется после восстановления unit без перехода по старым симлинкам. Действующие службы, конфигурация и данные защищены от перезаписи.
+- Cold restore is not blocked by a broken `/.postgres/systemd/postgresql@VERSION-CLUSTER.service` helper symlink or copies in `systemd/save`. The old local cache is not used as a unit-file source; a saved unit is taken only from the selected archive or recreated. The cache is updated after unit restoration without following old symlinks. Active services, configuration, and data are protected against overwriting.
 
 ## 2.2.0 — 2026-09-11
 
-Minor-выпуск с изменением функциональности; исторический журнал 2.1.2 не является полным подтверждением версии 2.2.0. Состав проверок указан в TEST.md.
+Minor release with functional changes; the historical 2.1.2 journal is not full validation of version 2.2.0. Check scope is documented in TEST.md.
 
-- Несовпадение версии регистрации кластера с `PG_VERSION` не блокирует бэкап: фактическая версия используется в имени архива, выборе пакета и метаданных, исходная регистрация сохраняется отдельно. Управление кластером использует прежний адрес; ротация и холодный restore учитывают различие.
+- A mismatch between the registered cluster version and `PG_VERSION` no longer blocks backup: the actual version is used in the archive name, package selection, and metadata; the original registration is retained separately. Cluster control uses the original address; retention and cold restore account for the difference.
 
-- Поддержаны Tantor SE (Special Edition) и BE (Basic Edition) в выборе сервера, метаданных бэкапов и сборке DEB. Приоритет: SE/Enterprise, затем BE, затем Free/PostgreSQL; внутри уровня — более новая основная версия. Явный выбор сохраняется.
-- Для бэкапов редакция Tantor определяется по установленному пакету-владельцу бинарника. Cron-бэкап не выбирает и не устанавливает сервер из глобального конфига.
-- Исторический журнал 2.1.2 не подтверждает новую функциональность Tantor SE/BE; требуется отдельный интеграционный прогон.
+- Added Tantor SE (Special Edition) and BE (Basic Edition) support to server selection, backup metadata, and DEB builds. Priority: SE/Enterprise, then BE, then Free/PostgreSQL; within a tier, the newer major comes first. Explicit selection is preserved.
+- For backups, the Tantor edition is determined from the installed package owning the binary. Cron backup does not select or install a server from the global configuration.
+- The historical 2.1.2 journal does not validate new Tantor SE/BE functionality; a separate integration run is required.
 
 ## 2.1.3 — 2026-09-09
 
-Этот patch-выпуск не влияет на функциональность управления PostgreSQL-кластерами,
-БД, бэкапами, портами и каталогами данных. Изменены только упаковка журнала,
-номера версии и документация. Журнал тестирования предыдущей версии 2.1.2
-полностью применим к неизменённой функциональности в пределах проверенных им
-сценариев; ему можно доверять. Новый полный функциональный прогон не заявляется.
+This patch release does not affect management of PostgreSQL clusters, databases, backups, ports, or data directories. Only journal packaging, version numbers, and documentation changed. The previous version's 2.1.2 test journal remains fully applicable to unchanged functionality within the scenarios it verified and can be trusted. No new full functional run is claimed.
 
-- Во все режимы DEB включён неизменённый `TEST-2.1.2-journal-passed.md` с установкой в `/usr/local/share/pg_claster_creator/` и правами `0644`. При отсутствии этого журнала сборка отклоняется.
-- Версия пакета — 2.1.3; версия подтверждающего журнала явно закреплена как 2.1.2, без переименования исторического отчёта.
+- Included the unchanged `TEST-2.1.2-journal-passed.md` in all DEB modes, installed under `/usr/local/share/pg_claster_creator/` with mode `0644`. Builds are rejected if this journal is missing.
+- Package version is 2.1.3; the supporting journal version is explicitly fixed at 2.1.2 without renaming the historical report.
 
 ## 2.1.2 — 2026-09-09
 
-- Добавлен итоговый [журнал проверки 2.1.2](TEST-2.1.2-journal-passed.md): 105 фаз OK на семи Astra WSL. Журнал хранится в корне; локальные промежуточные журналы tests/ исключены из Git.
-- Уточнена диагностика отсутствующих кластеров и ошибок `pg_lsclusters`, в том числе перед горячим рестори.
-- Для Astra/WSL ограничено время операций vendor-служб, исключены лишние stop/disable/unmask; без TTY повышение прав использует `sudo -n`.
-- При создании кластера явно задаются `peer` для локального доступа и выбранный метод аутентификации хоста (MD5 до версии 16 включительно, SCRAM для более новых).
+- Added the final [2.1.2 test journal](TEST-2.1.2-journal-passed.md): 105 OK phases on seven Astra WSL systems. The journal is stored in the root; local intermediate journals in tests/ are excluded from Git.
+- Improved diagnostics for missing clusters and `pg_lsclusters` errors, including before hot restore.
+- Bounded vendor-service operation times on Astra/WSL and removed unnecessary stop/disable/unmask calls; privilege escalation uses `sudo -n` without a TTY.
+- Cluster creation explicitly sets `peer` for local access and the selected host authentication method: MD5 through version 16, SCRAM for newer versions.
 
-- Все три сценария предпочитают `/usr/local/shared/pg_claster_creator/.new-claster.config`; при его отсутствии используется конфиг рядом с разрешённым файлом сценария. Сохранение основного сценария направлено в выбранный конфиг.
-- Списки резервных копий в `create-claster.sh` и `create-claster-deb.sh` включают символические ссылки на файлы архивов. Битые ссылки и ссылки на каталоги в список не попадают.
+- All three scripts prefer `/usr/local/shared/pg_claster_creator/.new-claster.config`; if absent, they use the configuration beside the resolved script file. Main-script saves target the selected configuration.
+- Backup lists in `create-claster.sh` and `create-claster-deb.sh` include symbolic links to archive files. Broken links and links to directories are excluded.
 
 ## 2.1.1 — 2026-09-06
 
-Патч-выпуск с единым компактным отображением размеров и уточнёнными правилами
-формирования пакетов для горячего и холодного восстановления.
+Patch release introducing consistent compact size displays and clarifying package construction rules for hot and cold restore.
 
-- В интерактивный список бэкапов `create-claster-deb.sh` добавлен выровненный размер файла архива с двумя знаками после точки и двухбуквенной единицей; поле размера ограничено девятью символами, а значение получается через `stat` без открытия или распаковки архива.
-- Разделено формирование зависимостей DEB по типу бэкапа: автоматический горячий рестори PostgreSQL Pro использует только упорядоченную цепочку `contrib`, которая подтягивает согласованный сервер, а холодный рестори зависит только от точного серверного пакета основной версии физического архива.
-- Исправлен суффикс имени DEB режима 3 с опечаточного `-fill` на `-full`, обозначающий пакет с полностью заполненным из холодного бэкапа кластером.
-- В `create-claster.sh` унифицирован человекочитаемый вывод объёма БД и каталога данных кластера: две цифры после точки, двухбуквенная единица и выровненное поле не длиннее девяти символов; размер каталога дополнительно показывается на экране информации о выбранном кластере.
+- Added an aligned archive file size to the interactive backup list in `create-claster-deb.sh`, with two decimal places and a two-letter unit. The size field is limited to nine characters; the value comes from `stat` without opening or extracting the archive.
+- Separated DEB dependency construction by backup type: automatic PostgreSQL Pro hot restore uses only an ordered `contrib` chain that pulls in a matching server; cold restore depends only on the exact server package for the physical archive's major version.
+- Corrected the mode-3 DEB filename suffix from the misspelled `-fill` to `-full`, indicating a package with a cluster fully populated from a cold backup.
+- Unified human-readable database and cluster data-directory sizes in `create-claster.sh`: two decimal places, a two-letter unit, and an aligned field no longer than nine characters. Directory size is also shown on the selected-cluster information screen.
 
 ## 2.1.0 — 2026-09-06
 
-Минорный выпуск с более надёжным развёртыванием DEB, воспроизводимыми командами
-сборки, безопасным восстановлением БД и полным регрессионным планом.
+Minor release with more reliable DEB deployment, reproducible build commands, safer database restore, and a full regression plan.
 
-- Занятый TCP-порт больше не прерывает неинтерактивную установку кластера и `postinst`: выбирается первый следующий свободный порт, а предупреждение сообщает фактическое назначение и форму команды `create-claster.sh --action port` для последующей смены.
-- В пакетах режимов 2 и 4 уведомление о замене занятого порта повторяется в конце `postinst`, после создания кластера или горячего рестори, чтобы его не скрывал продолжительный вывод `pg_restore`.
-- После подтверждения интерактивной сборки `create-claster-deb.sh` создаёт рядом с собой `create-claster-deb-last.sh` с правами `0755` и готовой неинтерактивной командой повтора, включая `--force`, абсолютные пути и выбранные параметры режимов 1–4.
-- Если каталог сборщика недоступен для записи, файл повтора сохраняется в автоматически создаваемом `~/tmp`; неинтерактивный запуск сборщика не создаёт и не изменяет файл последней команды.
-- В режиме автоматического выбора PostgreSQL Pro дополнительные зависимости `postgrespro-ent-*-server`, уже покрытые допустимыми альтернативами `contrib`, исключаются; итоговый `Depends` содержит только `postgresql-common` и цепочку `contrib`, которая сама устанавливает сервер совпадающей версии.
-- При установке или перемещении кластера отсутствующие пользовательский `--data-root` и каталог `pg_{версия}` создаются явно с проверкой результата.
-- Исправлен сгенерированный `postinst`: маркер `.done` больше не подавляет развёртывание, если целевой кластер отсутствует в `pg_lsclusters`.
-- Устаревшие маркеры `.done`, `.cluster-created` и `.data-moved` автоматически удаляются, после чего режимы 2–4 выполняют план заново; перед созданием новых маркеров фактическое наличие кластера проверяется повторно.
-- Повторная конфигурация после прерванного режима 3 или 4 продолжает отмеченный промежуточный этап вместо ошибочного объявления существующего кластера сторонним и пропуска рестори.
-- Интерактивное удаление теперь всегда предлагает подходящий бэкап: холодный перед удалением кластера и горячий перед удалением отдельной БД.
-- Отказ от горячего бэкапа БД требует отдельного подтверждения удаления без резервной копии; после успешного бэкапа сохраняется финальное подтверждение удаления самой БД.
-- В метаданные новых горячих и холодных бэкапов добавлена shell-безопасная команда, позволяющая неинтерактивно повторить сборку соответствующего DEB-пакета через `create-claster-deb.sh`.
-- Команда фиксирует режим, семейство и точный серверный пакет, версию, кластер, порт, абсолютный путь бэкапа, имя горячей БД и обнаруженный пользовательский `data-root`.
-- Горячий рестори с `--overwrite yes` больше не использует пообъектный `pg_restore --clean`, который завершался ошибкой на унаследованных ограничениях таблиц.
-- После проверки архива, оглавления дампа и восстановления отсутствующих ролей существующая пользовательская БД удаляется через `dropdb --force`, заново создаётся с прежним владельцем и восстанавливается в чистую БД.
-- Замена служебных БД `postgres`, `template0` и `template1` запрещена; подтверждение разрушительной операции по-прежнему имеет безопасный отрицательный ответ по умолчанию.
-- В `TEST.md` добавлен обязательный план полного тестирования из 55 именованных проверок с ожидаемыми результатами, форматом журнала и сквозными сценариями для всех трёх сценариев.
-- Генерируемый `create-claster-deb-last.sh` добавлен в `.gitignore`.
+- An occupied TCP port no longer interrupts non-interactive cluster installation or `postinst`: the next available port is selected, and the warning reports the actual assignment and the `create-claster.sh --action port` command form for changing it later.
+- In mode-2 and mode-4 packages, the occupied-port replacement notification is repeated at the end of `postinst`, after cluster creation or hot restore, so lengthy `pg_restore` output does not hide it.
+- After an interactive build is confirmed, `create-claster-deb.sh` creates `create-claster-deb-last.sh` beside itself with mode `0755` and a ready-to-run non-interactive repeat command, including `--force`, absolute paths, and the selected parameters for modes 1–4.
+- If the builder directory is not writable, the repeat file is saved in an automatically created `~/tmp`; non-interactive builder runs neither create nor modify the last-command file.
+- During automatic PostgreSQL Pro selection, additional `postgrespro-ent-*-server` dependencies already covered by eligible `contrib` alternatives are omitted. The resulting `Depends` contains only `postgresql-common` and the `contrib` chain, which installs the matching server version itself.
+- During cluster installation or relocation, a missing custom `--data-root` and `pg_{version}` directory are explicitly created and verified.
+- Fixed generated `postinst`: a `.done` marker no longer suppresses deployment when the target cluster is absent from `pg_lsclusters`.
+- Stale `.done`, `.cluster-created`, and `.data-moved` markers are removed automatically, after which modes 2–4 rerun the plan. Actual cluster presence is rechecked before writing new markers.
+- Reconfiguration after an interrupted mode 3 or 4 continues the recorded intermediate stage rather than incorrectly treating the existing cluster as unrelated and skipping restore.
+- Interactive deletion now always offers the appropriate backup: cold before cluster deletion and hot before deleting an individual database.
+- Declining a hot database backup requires separate confirmation of deletion without a backup; after a successful backup, final confirmation of database deletion is still required.
+- Added a shell-safe command to metadata in new hot and cold backups for repeating the corresponding DEB build non-interactively through `create-claster-deb.sh`.
+- The command records mode, family and exact server package, version, cluster, port, absolute backup path, hot-backup database name, and any detected custom `data-root`.
+- Hot restore with `--overwrite yes` no longer uses object-by-object `pg_restore --clean`, which failed on inherited table constraints.
+- After validating the archive and dump table of contents and restoring missing roles, the existing user database is dropped with `dropdb --force`, recreated with its previous owner, and restored into the clean database.
+- Replacement of system databases `postgres`, `template0`, and `template1` is forbidden; destructive-operation confirmation still defaults safely to no.
+- Added a mandatory full test plan to `TEST.md` with 55 named checks, expected results, journal format, and end-to-end scenarios for all three scripts.
+- Added generated `create-claster-deb-last.sh` to `.gitignore`.
 
 ## 2.0.2 — 2026-09-06
 
-Патч-выпуск с автоматическим выбором наиболее новой допустимой версии PostgreSQL Pro для восстановления горячего бэкапа.
+Patch release with automatic selection of the newest eligible PostgreSQL Pro version for hot-backup restore.
 
-- Для пакетов режима `4` с неявным пакетом `postgrespro-ent` значение `--pg-version` стало минимальной целевой версией: зависимости перечисляют `contrib` от версии 18 к заданному минимуму, чтобы APT предпочитал самый новый доступный полный комплект; каждый `contrib` требует сервер точно той же версии.
-- Сгенерированный `postinst` выбирает фактически установленную версию PostgreSQL Pro не ниже минимума и использует её для создания кластера и горячего рестори; уже установленная минимальная версия сохраняется.
-- Явный ключ `--package` по-прежнему фиксирует точный серверный пакет и отключает выбор более новой версии. Холодный рестори режима `3` остаётся привязанным к версии физического бэкапа.
+- For mode `4` packages with an implicit `postgrespro-ent` package, `--pg-version` now specifies the minimum target version: dependencies list `contrib` from version 18 down to that minimum so APT prefers the newest available complete set. Each `contrib` requires the server at exactly the same version.
+- Generated `postinst` selects the actually installed PostgreSQL Pro version at or above the minimum and uses it for cluster creation and hot restore; an already installed minimum version is retained.
+- Explicit `--package` still pins the exact server package and disables selection of a newer version. Mode `3` cold restore remains tied to the physical backup's version.
 
 ## 2.0.1 — 2026-09-06
 
-Патч-выпуск с расширенной информацией о кластерах, исправленной пакетной раскладкой и управляемой повторной установкой из DEB.
+Patch release with expanded cluster information, corrected package layout, and controlled DEB reinstallation.
 
-- Добавлен флаг установки `CLASTER_FORCE_INSTALL=1`: существующий кластер удаляется без бэкапа штатным действием основного сценария, маркеры сбрасываются, затем план пакета выполняется заново; режим применяется в пакетах 2–4, включая холодный рестори.
-- Добавлен флаг `CLASTER_FORCE_DB_INSTALL=1` только для режима 4: кластер сохраняется, а целевая БД принудительно восстанавливается из горячего дампа с очисткой существующей БД.
-- Одновременное использование двух принудительных флагов запрещено; `CLASTER_FORCE_DB_INSTALL` в режимах 2 и 3 отклоняется до изменения данных.
-- `postinst` пакетов режимов `2`–`4` теперь завершает установку с кодом `0` и предупреждением, если целевой кластер уже зарегистрирован; повторное развёртывание и рестори в этом случае не выполняются.
-- Сборщик `create-deb.sh` переименован в `create-claster-deb.sh`; его локализованные man-страницы переименованы соответственно.
-- `create-claster-deb.sh` теперь включается во все создаваемые пакеты в `/usr/local/share/pg_claster_creator`, без симлинка в `/usr/local/bin`.
-- При запуске `create-claster.sh` через пакетную ссылку из `/usr/local/bin` конфиг дополнительно ищется в `../share/pg_claster_creator` относительно вызванного сценария.
-- Интерактивное действие `Информация: о развернутых кластерах` теперь выводит нумерованный цветной список кластеров.
-- После выбора работающего кластера показывается нумерованный и выровненный список всех его БД, включая шаблонные, с размерами; остановленный кластер автоматически не запускается.
-- Неинтерактивное действие `--action info` сохраняет прежний вывод полной таблицы `pg_lsclusters`.
+- Added installation flag `CLASTER_FORCE_INSTALL=1`: the existing cluster is deleted without a backup using the main script's standard action, markers are reset, and the package plan runs again. Applies to modes 2–4, including cold restore.
+- Added `CLASTER_FORCE_DB_INSTALL=1` for mode 4 only: the cluster is preserved, while the target database is forcibly restored from the hot dump with cleanup of the existing database.
+- Using both force flags together is forbidden; `CLASTER_FORCE_DB_INSTALL` in modes 2 and 3 is rejected before any data changes.
+- Mode `2`–`4` package `postinst` now finishes with exit code `0` and a warning if the target cluster is already registered; no redeployment or restore is performed in that case.
+- Renamed builder `create-deb.sh` to `create-claster-deb.sh`; its localized man pages were renamed accordingly.
+- `create-claster-deb.sh` is now included in every generated package under `/usr/local/share/pg_claster_creator`, without a symlink in `/usr/local/bin`.
+- When `create-claster.sh` is launched through the package link in `/usr/local/bin`, configuration is additionally searched for in `../share/pg_claster_creator` relative to the invoked script.
+- The interactive “Information: deployed clusters” action now displays a numbered, colored cluster list.
+- Selecting a running cluster displays a numbered, aligned list of all its databases, including templates, with sizes; a stopped cluster is not started automatically.
+- Non-interactive `--action info` retains the previous full `pg_lsclusters` table output.
 
 ## 2.0.0 — 2026-09-05
 
-Крупный выпуск с плановым горячим резервным копированием, переносом ролей и двуязычной системной документацией.
+Major release adding scheduled hot backups, role transfer, and bilingual system documentation.
 
-### Горячий бэкап и роли
+### Hot backups and roles
 
-- В метаданные горячего бэкапа добавлены прикладные роли владельцев и получателей ACL выбранной БД.
-- Для ролей сохраняются признаки `LOGIN`, `SUPERUSER`, `INHERIT`, `CREATEROLE`, `CREATEDB`, `REPLICATION`, `BYPASSRLS`, лимит подключений, срок действия и доступный SCRAM/MD5-хеш из `pg_authid`; открытые пароли не сохраняются.
-- Перед `pg_restore` создаются все отсутствующие роли из метафайла, поэтому восстанавливаются `GRANT` для ролей наподобие `aida_writer` и `aida_reader`.
-- Существующие и системные роли не изменяются; для старых архивов сохранён совместимый поиск владельцев в оглавлении дампа.
-- Горячему архиву назначаются права `0600` с проверкой фактического режима и предупреждением для файловых систем без поддержки POSIX-прав.
+- Added application owner roles and ACL grantee roles for the selected database to hot-backup metadata.
+- Preserved role attributes `LOGIN`, `SUPERUSER`, `INHERIT`, `CREATEROLE`, `CREATEDB`, `REPLICATION`, and `BYPASSRLS`, connection limits, validity periods, and available SCRAM/MD5 hashes from `pg_authid`; plaintext passwords are not saved.
+- All missing roles from the metadata are created before `pg_restore`, allowing `GRANT` entries for roles such as `aida_writer` and `aida_reader` to be restored.
+- Existing and system roles are unchanged; compatible owner discovery from the dump table of contents is retained for older archives.
+- Hot archives receive mode `0600`, with actual-mode verification and a warning on filesystems that do not support POSIX permissions.
 
-### Плановый горячий бэкап
+### Scheduled hot backups
 
-- Добавлен `create-claster-backup.sh` версии `2.0.0` с подробными `--help`, `--version` и англоязычной заголовочной документацией.
-- Сценарий принимает `<версия> <кластер> <имя БД>` и вызывает неинтерактивный горячий бэкап через `create-claster.sh`.
-- Добавлены `--backup-dir`, ротация по `--files-cnt` или `--files-size`, единицы размера до TiB и блокировка параллельного запуска через `flock`.
-- Ротация после успешного бэкапа отбирает файлы только по строгой маске `{версия}-{БД}-YYYYMMDD-hhmmss-dmp.tar.gz`, не открывая архивы и не читая их метаданные.
-- Для одинаковых имён БД одной версии на разных кластерах предусмотрено разделение задач через разные каталоги `--backup-dir`.
-- Ключ `--cron` интерактивно запрашивает периодичность и недостающий лимит, затем атомарно создаёт отдельную задачу `/etc/cron.d/pg-claster-backup-*` с собственным журналом.
+- Added `create-claster-backup.sh` version `2.0.0` with detailed `--help`, `--version`, and English header documentation.
+- The script accepts `<version> <cluster> <database>` and invokes a non-interactive hot backup through `create-claster.sh`.
+- Added `--backup-dir`, retention via `--files-cnt` or `--files-size`, size units up to TiB, and concurrent-run locking with `flock`.
+- After a successful backup, retention selects files only by the strict `{version}-{database}-YYYYMMDD-hhmmss-dmp.tar.gz` pattern without opening archives or reading metadata.
+- Tasks for identically named databases of the same version on different clusters can be separated using different `--backup-dir` directories.
+- `--cron` interactively requests the schedule and any missing limit, then atomically creates a dedicated `/etc/cron.d/pg-claster-backup-*` task with its own log.
 
-### Сборка и установка
+### Build and installation
 
-- `create-deb.sh` самостоятельно создаёт чистый скелет `tmp/create-deb.XXXXXX/rootFs`; заранее подготовленное дерево больше не требуется.
-- `create-claster-backup.sh` устанавливается в `/usr/local/share/pg_claster_creator/` с симлинком `/usr/local/bin/create-claster-backup.sh`.
-- Во всех трёх `.sh`-сценариях версия поднята до `2.0.0`.
+- `create-deb.sh` creates a fresh `tmp/create-deb.XXXXXX/rootFs` skeleton itself; a prebuilt tree is no longer required.
+- `create-claster-backup.sh` is installed under `/usr/local/share/pg_claster_creator/` with symlink `/usr/local/bin/create-claster-backup.sh`.
+- Bumped the version in all three `.sh` scripts to `2.0.0`.
 
-### Man-страницы
+### Man pages
 
-- Добавлены английские man-страницы для `create-claster.sh`, `create-claster-backup.sh` и `create-deb.sh`.
-- Добавлены русские локализованные man-страницы для всех трёх сценариев.
-- При сборке страницы детерминированно сжимаются через `gzip -9n` и устанавливаются в `/usr/share/man/man1` и `/usr/share/man/ru/man1`.
-- Документированы действия, ключи, переменные окружения, ротация, cron, режимы DEB-сборки, файлы, примеры и авторство.
+- Added English man pages for `create-claster.sh`, `create-claster-backup.sh`, and `create-deb.sh`.
+- Added Russian localized man pages for all three scripts.
+- During builds, pages are compressed deterministically with `gzip -9n` and installed in `/usr/share/man/man1` and `/usr/share/man/ru/man1`.
+- Documented actions, options, environment variables, retention, cron, DEB build modes, files, examples, and authorship.
 
 ## 1.2.0 — 2026-09-05
 
-Расширение интерактивного и автоматизируемого средства управления PostgreSQL-кластерами.
+Extended the interactive and automatable PostgreSQL cluster-management tool.
 
-### Подготовка окружения и пакетов
+### Environment and package preparation
 
-- Добавлена обязательная проверка пакета `postgresql-common`.
-- Реализована установка отсутствующего `postgresql-common` через APT с отображением хода установки.
-- Добавлен поиск установленных и доступных серверных пакетов.
-- Поддержаны семейства PostgreSQL Pro Enterprise, PostgreSQL Server и Tantor Free.
-- Доступные пакеты группируются по основной версии PostgreSQL и сортируются по имени внутри группы.
-- Приоритет пакетов назначается по версии PostgreSQL: от самой новой к самой старой; пакеты одной версии имеют одинаковый приоритет.
-- При отсутствии данных о пакетах выполняется обновление сведений APT.
-- Проверка кандидата APT выполняется с локалью `C`, поэтому работает как с английским `Candidate:`, так и при русской локали системного интерфейса.
-- После установки проверяется наличие серверного исполняемого файла `postgres`.
-- Для PostgreSQL Pro устанавливается комплект `postgrespro-ent-{версия}-server` и `postgrespro-ent-{версия}-contrib`; конфликтующий с `postgresql-common` метапакет не используется.
-- Перед изменением пакетов выполняется симуляция APT; операция отменяется, если планируется удаление любого установленного пакета.
-- Перед установкой vendor-пакета со штатной службы принудительно снимается возможная systemd-маска.
-- После установки штатная vendor-служба останавливается, а её автозапуск отключается; `systemctl mask` не используется.
-- Штатный повторный запуск сделан тихим: скрыты сообщения об уже установленных обязательном и серверном пакетах, стандартный вывод `systemctl disable` и подтверждение успешных `stop/disable`.
-- При ошибке `systemctl` сохраняется диагностический вывод команды, после чего сценарий завершается с понятным сообщением.
-- Предупреждения и сообщения о нестандартной структуре `/.postgres` сохраняются на экране при переходе к Menu1; следующий заголовок не очищает терминал.
-- Вывод фактической установки пакетов не скрывается и также сохраняется до появления главного меню.
+- Added a mandatory check for `postgresql-common`.
+- Implemented APT installation of missing `postgresql-common`, showing installation progress.
+- Added discovery of installed and available server packages.
+- Added PostgreSQL Pro Enterprise, PostgreSQL Server, and Tantor Free family support.
+- Available packages are grouped by PostgreSQL major version and sorted by name within each group.
+- Package priority is assigned by PostgreSQL version, newest to oldest; packages of the same version have equal priority.
+- APT metadata is refreshed when package information is unavailable.
+- The APT candidate check runs with locale `C`, so it works with English `Candidate:` output even when the system interface uses a Russian locale.
+- Server executable `postgres` is checked after installation.
+- PostgreSQL Pro installs the `postgrespro-ent-{version}-server` and `postgrespro-ent-{version}-contrib` set; the metapackage conflicting with `postgresql-common` is not used.
+- An APT simulation runs before package changes; the operation is cancelled if any installed package would be removed.
+- Before a vendor package is installed, any systemd mask is forcibly removed from its stock service.
+- After installation, the stock vendor service is stopped and its autostart disabled; `systemctl mask` is not used.
+- Normal repeat runs are quiet: messages about already installed prerequisite/server packages, standard `systemctl disable` output, and successful `stop/disable` confirmations are hidden.
+- On a `systemctl` failure, command diagnostics are retained, then the script exits with a clear message.
+- Warnings and messages about a nonstandard `/.postgres` layout remain visible when entering Menu1; the next heading does not clear the terminal.
+- Actual package installation output is not hidden and also remains visible until the main menu appears.
 
-### Конфигурация
+### Configuration
 
-- Общие параметры вынесены в `.new-claster.config`.
-- Добавлены настройки локали, семейства и версии PostgreSQL, параметров кластера и каталога бэкапов.
-- Реализовано безопасное сохранение значений в конфиг через временный файл.
-- При работе сценарий пытается установить права `0600` на конфиг.
-- Параметры `cls_pt`, `cls_nm`, `cls_ch`, `cls_us`, `cls_pw` зафиксированы как пользовательские значения по умолчанию и больше не перезаписываются результатами установки, рестори, аргументами или переменными окружения.
+- Moved common settings into `.new-claster.config`.
+- Added locale, PostgreSQL family/version, cluster, and backup-directory settings.
+- Implemented safe configuration saving through a temporary file.
+- The script attempts to set configuration permissions to `0600` during operation.
+- Fixed `cls_pt`, `cls_nm`, `cls_ch`, `cls_us`, and `cls_pw` as user defaults; they are no longer overwritten by installation/restore results, arguments, or environment variables.
 
-### Служебная структура `/.postgres`
+### The `/.postgres` helper layout
 
-- Реализовано создание `/.postgres`, `/.postgres/systemd/save`, `/.postgres/tmp` и каталога бэкапов.
-- Симлинки `etc`, `data`, `bin`, `lib`, `share`, `man` и `doc` создаются динамически для выбранной версии и семейства сервера.
-- Добавлены обязательные симлинки `include -> {PG_HOME}/include` и `run -> /var/run`.
-- Исправлена раскладка симлинков для Tantor Free.
-- Для PostgreSQL Pro и Tantor создаётся совместимый путь `/usr/lib/postgresql/{версия}`.
-- Существующие обычные файлы и каталоги на месте ожидаемого симлинка не перезаписываются автоматически.
-- Распознаётся обратная раскладка `/var/lib/postgresql/{версия} -> /.postgres/data`; она сохраняется без ложного предупреждения и без создания цикла симлинков.
+- Implemented creation of `/.postgres`, `/.postgres/systemd/save`, `/.postgres/tmp`, and the backup directory.
+- Symlinks `etc`, `data`, `bin`, `lib`, `share`, `man`, and `doc` are created dynamically for the selected server version/family.
+- Added required symlinks `include -> {PG_HOME}/include` and `run -> /var/run`.
+- Fixed the Tantor Free symlink layout.
+- Created a compatible `/usr/lib/postgresql/{version}` path for PostgreSQL Pro and Tantor.
+- Existing regular files and directories at expected symlink locations are not overwritten automatically.
+- Recognized and preserved the reverse `/var/lib/postgresql/{version} -> /.postgres/data` layout without a false warning or a symlink loop.
 
-### Интерактивный интерфейс
+### Interactive interface
 
-- Добавлены заголовок с версией сценария, разделители и названия шагов.
-- Устранён повторный вывод заголовка с версией при первом переходе из подготовки в главное меню.
-- Реализовано главное меню: выход, информация, установка, переключение порта, перемещение данных, бэкап, восстановление и удаление.
-- Добавлено самостоятельное действие `Кластер: Переместить данные`; действия перенумерованы: порт — `3`, перемещение — `4`, бэкап — `5`, рестори — `6`, удаление — `7`.
-- Добавлена обработка возврата из вложенных экранов и некорректного ввода.
-- При неверном номере на этапе выбора пакета экран очищается и меню выбора выводится заново вместе с предупреждением.
-- Добавлен единый вывод предупреждений и ошибок с номером строки и кодом завершения.
+- Added a script-version heading, separators, and step names.
+- Removed the duplicate version heading on the first transition from preparation to the main menu.
+- Implemented the main menu: exit, information, installation, port switching, data relocation, backup, restore, and deletion.
+- Added a separate “Cluster: Move data” action; renumbered actions: port — `3`, move — `4`, backup — `5`, restore — `6`, delete — `7`.
+- Added handling of returns from nested screens and invalid input.
+- An invalid number during package selection clears the screen and redisplays the selection menu with a warning.
+- Added consistent warnings and errors with line numbers and exit codes.
 
-### Командная строка и автоматизация
+### Command line and automation
 
-- Добавлены ключи `-v` и `--version` для вывода версии без проверки прав, конфига и пакетов.
-- Добавлены ключи `-h` и `--help` с описанием параметров, окружения и примерами запуска.
-- Добавлен неинтерактивный режим для действий `info`, `install`, `port`, `move-data`, `backup`, `restore` и `delete`.
-- Неинтерактивный режим включается автоматически при передаче `--action` или `PGCC_ACTION`; чтение stdin, меню, подтверждения и паузы отключаются.
-- Параметры принимаются через аргументы командной строки и переменные окружения `PGCC_*`; аргументы имеют приоритет над окружением, окружение — над `.new-claster.config`.
-- Добавлена адресация кластера по версии и имени без нумерованного интерактивного выбора.
-- Для рестори добавлен выбор архива по абсолютному пути либо по имени относительно `backup_dir`.
-- Добавлены управляемые параметры `backup-before-delete`, `clear-wal` и `overwrite` с безопасными значениями по умолчанию; `overwrite` применяется только к горячему рестори существующей БД.
-- В неинтерактивном режиме терминал не очищается управляющими последовательностями.
-- Успешные подготовительные проверки в неинтерактивном режиме переведены в тихий режим; установка пакетов, предупреждения и ошибки продолжают отображаться.
-- Действие `--action info` больше не выводит отдельный этап подготовки, не проверяет серверный пакет, не изменяет состояние vendor-службы и не перестраивает ссылки `/.postgres`.
-- Для `backup` и `delete` добавлена позиционная адресация в стиле `pg_ctlcluster`: `--action backup ВЕРСИЯ КЛАСТЕР` и `--action delete ВЕРСИЯ КЛАСТЕР`.
-- Добавлены проверки количества позиционных аргументов и запрет смешивания позиционной формы с `--pg-version/--cluster-name`.
-- `--backup-file` и `PGCC_BACKUP_FILE` поддерживают абсолютные пути и относительные пути от текущего каталога; для совместимости имя отсутствующего там файла дополнительно ищется в `backup_dir`.
+- Added `-v` and `--version` to display the version without checking privileges, configuration, or packages.
+- Added `-h` and `--help` with parameter/environment descriptions and invocation examples.
+- Added non-interactive mode for `info`, `install`, `port`, `move-data`, `backup`, `restore`, and `delete`.
+- Non-interactive mode is enabled automatically by `--action` or `PGCC_ACTION`; stdin reads, menus, confirmations, and pauses are disabled.
+- Parameters are accepted through CLI arguments and `PGCC_*` environment variables; arguments take precedence over environment, and environment over `.new-claster.config`.
+- Added cluster addressing by version/name without numbered interactive selection.
+- For restore, added archive selection by absolute path or by filename relative to `backup_dir`.
+- Added configurable `backup-before-delete`, `clear-wal`, and `overwrite` settings with safe defaults; `overwrite` applies only to hot restore into an existing database.
+- Non-interactive mode does not clear the terminal using control sequences.
+- Successful non-interactive preparation checks are quiet; package installation, warnings, and errors remain visible.
+- `--action info` no longer displays a separate preparation stage, checks the server package, changes vendor-service state, or rebuilds `/.postgres` links.
+- Added `pg_ctlcluster`-style positional addressing for `backup` and `delete`: `--action backup VERSION CLUSTER` and `--action delete VERSION CLUSTER`.
+- Added positional argument count checks and prohibited mixing positional addressing with `--pg-version/--cluster-name`.
+- `--backup-file` and `PGCC_BACKUP_FILE` support absolute paths and paths relative to the current directory; for compatibility, a filename not found there is also searched for in `backup_dir`.
 
-### Создание кластера
+### Cluster creation
 
-- Добавлен нумерованный вывод существующих кластеров.
-- В нумерованных списках восстановлена цветовая схема `pg_lsclusters`: `online*` выводится зелёным, остальные состояния — красным.
-- Цвет применяется только в терминале и только при отображении; строки для выбора и машинного разбора остаются без ANSI-кодов.
-- Реализован интерактивный ввод порта, имени кластера, схемы/владельца, пользователя и пароля.
-- Добавлена проверка диапазона порта и конфликта с зарегистрированными кластерами.
-- Добавлена проверка повторяющегося имени кластера.
-- При смене имени кластера связанные параметры получают новое значение по умолчанию.
-- Добавлена проверка имён как SQL-идентификаторов.
-- Интерактивный ввод сделан транзакционным: проверяемые значения хранятся отдельно и применяются только после общего подтверждения.
-- Исправлено сохранение ошибочного ввода как нового значения по умолчанию: после недопустимого порта следующий запрос снова показывает последнее корректное значение.
-- Отмена диалога не изменяет параметры текущего запуска и `.new-claster.config`.
-- Добавлен интерактивный выбор системного каталога данных либо пользовательского корня размещения.
-- Для корня `/DATA` каталог кластера версии 16 формируется как `/DATA/pg_16/{имя кластера}`.
-- Пользовательский каталог проверяется: путь должен быть абсолютным, без пробельных символов, а итоговый каталог кластера — отсутствовать либо быть пустым.
-- Для автоматизации добавлены `--data-root` и `PGCC_DATA_ROOT`; выбранный путь не сохраняется в `.new-claster.config`.
-- Определение каталога установленного сервера для кластеров с нестандартным путём данных дополнено чтением `postmaster.opts`.
-- Кластер создаётся через `pg_createcluster` с отдельным каталогом данных и журналом.
-- Формируются дополнительные настройки `conf.d`, сетевые правила `pg_hba.conf`, параметры порта, имени кластера и шифрования паролей.
-- Доступные расширения автоматически включаются в `shared_preload_libraries`.
-- Создаётся отдельный systemd unit и его сохранённая копия в `/.postgres/systemd/save`.
-- Создаются база данных, схема, прикладные роли и роль `cron_user`.
-- Настраиваются `search_path` и `lc_messages` для создаваемых ролей.
+- Added numbered output of existing clusters.
+- Restored the `pg_lsclusters` color scheme in numbered lists: `online*` is green; other states are red.
+- Color is used only in terminal display; selection and machine-parsed rows contain no ANSI codes.
+- Implemented interactive input of port, cluster name, schema/owner, user, and password.
+- Added port-range and registered-cluster conflict checks.
+- Added duplicate cluster-name validation.
+- Changing a cluster name updates defaults for related parameters.
+- Added SQL-identifier name validation.
+- Made interactive input transactional: values under validation are held separately and applied only after overall confirmation.
+- Fixed invalid input being retained as a new default: after an invalid port, the next prompt again shows the last valid value.
+- Cancelling a dialog does not change current-run parameters or `.new-claster.config`.
+- Added interactive selection of the system data directory or a custom data root.
+- For root `/DATA`, a version-16 cluster directory is `/DATA/pg_16/{cluster name}`.
+- Custom-directory validation requires an absolute path with no whitespace; the final cluster directory must be absent or empty.
+- Added `--data-root` and `PGCC_DATA_ROOT` for automation; the selected path is not saved to `.new-claster.config`.
+- Extended installed-server directory detection to read `postmaster.opts` for clusters with nonstandard data paths.
+- Clusters are created with `pg_createcluster` using separate data and log locations.
+- Generated additional `conf.d` settings, `pg_hba.conf` network rules, and port, cluster-name, and password-encryption settings.
+- Available extensions are automatically added to `shared_preload_libraries`.
+- Created a separate systemd unit and a saved copy under `/.postgres/systemd/save`.
+- Created the database, schema, application roles, and `cron_user` role.
+- Configured `search_path` and `lc_messages` for newly created roles.
 
-### Переключение TCP-порта
+### TCP port switching
 
-- Добавлен цветной нумерованный выбор кластера и запрос нового TCP-порта.
-- Проверяются диапазон `1–65535`, совпадение с текущим портом, конфликт с другим кластером и фактическая занятость TCP-порта сторонним процессом.
-- Настройки порта изменяются через `pg_conftool`; согласуются активные значения в `conf.d` и `postgresql.auto.conf`.
-- Работающий кластер останавливается перед изменением и запускается после него с проверкой результата; остановленный кластер сохраняет своё состояние.
-- Добавлены неинтерактивное действие `--action port`, ключ `--port` и эквивалентные переменные `PGCC_ACTION=port`, `PGCC_CLUSTER_PORT`.
-- Исправлена функция предупреждений: при отключённом режиме сохранения стартового экрана предупреждение всегда возвращает успешный служебный код и больше не активирует обработчик фатальной ошибки.
+- Added colored numbered cluster selection and a prompt for the new TCP port.
+- Checked range `1–65535`, equality with the current port, conflicts with another cluster, and actual TCP-port use by an unrelated process.
+- Changed port settings through `pg_conftool`; reconciled active settings in `conf.d` and `postgresql.auto.conf`.
+- A running cluster is stopped before the change and restarted afterward with result verification; a stopped cluster retains its state.
+- Added non-interactive `--action port`, option `--port`, and equivalent variables `PGCC_ACTION=port` and `PGCC_CLUSTER_PORT`.
+- Fixed the warning function: when startup-screen preservation is disabled, warnings always return a successful internal status and no longer trigger the fatal-error handler.
 
-### Перемещение данных кластера
+### Cluster data relocation
 
-- Добавлен цветной нумерованный выбор кластера и выбор дефолтного либо пользовательского размещения данных.
-- Для корня `/DATA` целевой путь формируется как `/DATA/pg_{версия}/{кластер}`.
-- Дефолтный путь определяется по поставке сервера: стандартный каталог PostgreSQL/PostgreSQL Pro либо отдельный каталог Tantor Free.
-- Проверяются занятость цели, совпадение физических путей, попытка перемещения внутрь исходного каталога, конечный симлинк и безопасность последнего компонента пути.
-- Работающий кластер останавливается перед `mv` и запускается после проверки нового пути; остановленный кластер сохраняет состояние `down`.
-- После перемещения обновляются ссылки на каталог данных в конфигурации, `postgresql.auto.conf`, `postmaster.opts`, активном и сохранённом systemd unit.
-- Результат проверяется по фактическому каталогу данных в `pg_lsclusters`.
-- Для автоматизации добавлено действие `--action move-data`; `--data-root` и `PGCC_DATA_ROOT` задают пользовательский корень, а их отсутствие выбирает дефолтное размещение.
+- Added colored numbered cluster selection and a choice of default or custom data placement.
+- For root `/DATA`, the target path is `/DATA/pg_{version}/{cluster}`.
+- The default path is determined by the server distribution: the standard PostgreSQL/PostgreSQL Pro directory or a separate Tantor Free directory.
+- Checked target occupancy, physical-path equality, attempts to move inside the source directory, a symlink at the destination, and safety of the final path component.
+- A running cluster is stopped before `mv` and restarted after the new path is verified; a stopped cluster remains `down`.
+- After relocation, data-directory references are updated in configuration, `postgresql.auto.conf`, `postmaster.opts`, and active/saved systemd units.
+- Verified the result against the actual data directory reported by `pg_lsclusters`.
+- Added `--action move-data` for automation; `--data-root` and `PGCC_DATA_ROOT` select a custom root, while omitting them selects the default placement.
 
-### Холодное резервное копирование и удаление
+### Cold backups and deletion
 
-- Добавлен холодный бэкап без удаления: работающий до операции кластер автоматически запускается после успешного архивирования.
-- В интерактивное удаление добавлен выбор режима: удалить кластер либо отдельную БД.
-- Для удаления БД реализованы последовательный нумерованный выбор кластера и выбор БД из списка с размерами по номеру или точному имени.
-- БД удаляется версионной `dropdb --force` после отдельного подтверждения с безопасным отрицательным ответом по умолчанию.
-- Удаление `postgres` запрещено; `template0/template1` не предлагаются, прикладные роли после удаления БД сохраняются.
-- Неинтерактивное действие `delete` осталось совместимым с прежней логикой удаления кластера.
-- Добавлен интерактивный выбор кластера для удаления.
-- Исправлен вывод целей удаления: нумерованный список отображается в терминале и больше не перехватывается внутренней подстановкой команды.
-- По умолчанию перед удалением предлагается холодный бэкап.
-- Имя архива формируется как `{версия}-{кластер}-YYYYMMDD-hhmmss.tar.gz`.
-- Удаление без бэкапа требует отдельного подтверждения.
-- Перед архивированием кластер штатно останавливается.
-- Добавлена необязательная очистка WAL через версионную утилиту `pg_resetwal` или `pg_resetxlog`.
-- В бэкап включаются конфигурация, каталог данных, журнал и systemd unit выбранного кластера.
-- Симлинки в архиве разыменовываются.
-- В `root/backup-info.env` добавлены имя исходного хоста, дата, тип бэкапа, пакет, семейство и полная версия PostgreSQL, параметры исходного кластера, а также имена и размеры всех БД, включая шаблонные и БД с запрещёнными подключениями.
-- Для каждой БД холодного бэкапа сохраняются точный размер в байтах и читаемый размер `pg_size_pretty` на момент начала операции.
-- Перед упаковкой выводится результат `du -sh` для каталога данных; в метаданные сохраняются читаемый размер, размер выделенного пространства в байтах и исходная строка `du -sh`.
-- Остановленный кластер временно запускается для сбора обязательных метаданных БД, а затем снова останавливается перед архивированием.
-- `backup_dir`, включая стандартный `/.postgres/backup`, может быть символьной ссылкой на каталог; ссылка не заменяется и используется как при записи бэкапа, так и при поиске архивов для рестори.
-- Добавлена явная диагностика повреждённой ссылки, ссылки не на каталог и отсутствия требуемых прав доступа.
-- После удаления очищаются созданные systemd-файлы и симлинки службы.
-- Общий каталог `/var/log/postgresql` при удалении кластера не удаляется; `pg_dropcluster` удаляет только принадлежащий выбранному кластеру файл журнала.
-- После `pg_dropcluster` добавлена явная проверяемая очистка каталога конфигурации и каталога данных выбранного кластера, если штатная утилита оставила их на файловой системе.
-- Рекурсивное удаление защищено проверкой абсолютного нормализованного пути и точного совпадения последнего компонента с именем кластера; родительские каталоги не удаляются.
-- Очистка поддерживает системный путь, раскладку данных через `/.postgres/data` и пользовательские пути `/DATA/pg_{версия}/{кластер}`.
-- Systemd unit и ссылки выбранного кластера удаляются из всех поддерживаемых каталогов, а не только из одного предполагаемого пути.
+- Added cold backup without deletion: a cluster that was running before the operation restarts automatically after successful archiving.
+- Added an interactive deletion mode choice: delete a cluster or an individual database.
+- Database deletion uses sequential numbered cluster selection and database selection by number or exact name from a list with sizes.
+- The database is deleted using the version-specific `dropdb --force` after separate confirmation that safely defaults to no.
+- Deleting `postgres` is forbidden; `template0/template1` are not offered, and application roles are retained after database deletion.
+- Non-interactive `delete` remains compatible with the previous cluster-deletion behavior.
+- Added interactive selection of a cluster to delete.
+- Fixed deletion-target output: the numbered list is displayed in the terminal rather than captured by an internal command substitution.
+- A cold backup is offered before deletion by default.
+- Archive names follow `{version}-{cluster}-YYYYMMDD-hhmmss.tar.gz`.
+- Deletion without a backup requires separate confirmation.
+- The cluster is stopped normally before archiving.
+- Added optional WAL reset using the version-specific `pg_resetwal` or `pg_resetxlog` utility.
+- Backups include the selected cluster's configuration, data directory, log, and systemd unit.
+- Symlinks are dereferenced when archiving.
+- Added source hostname, date, backup type, package, family and full PostgreSQL version, source cluster parameters, and names/sizes of every database to `root/backup-info.env`, including template databases and databases that prohibit connections.
+- For every database in a cold backup, saved the exact byte size and human-readable `pg_size_pretty` size at the start of the operation.
+- Displayed `du -sh` for the data directory before packaging; saved the human-readable size, allocated size in bytes, and original `du -sh` line in metadata.
+- A stopped cluster is started temporarily to collect mandatory database metadata, then stopped again before archiving.
+- `backup_dir`, including the default `/.postgres/backup`, may be a symlink to a directory; the link is not replaced and is used both for writing backups and for finding restore archives.
+- Added explicit diagnostics for broken links, links to non-directories, and missing access permissions.
+- Removed generated systemd files and service symlinks after deletion.
+- The shared `/var/log/postgresql` directory is not deleted with a cluster; `pg_dropcluster` removes only the log file belonging to the selected cluster.
+- After `pg_dropcluster`, explicitly cleaned and verified the selected cluster's configuration/data directories if the native utility left them on disk.
+- Recursive deletion is protected by absolute normalized-path validation and an exact match between the final component and cluster name; parent directories are not removed.
+- Cleanup supports the system path, the `/.postgres/data` layout, and custom `/DATA/pg_{version}/{cluster}` paths.
+- The selected cluster's systemd unit and links are removed from all supported directories, not just one assumed location.
 
-### Горячее резервное копирование
+### Hot backups
 
-- В меню бэкапа добавлен выбор `1 — горячий`, `2 — холодный` с холодным типом по умолчанию.
-- После выбора горячего типа добавлен интерактивный выбор существующей базы данных по номеру или имени.
-- Исправлена обработка нумерованного списка: ввод `2` теперь выбирает вторую БД, а не проверяется как буквальное имя базы `2`.
-- Номер сделан основным способом интерактивного выбора БД, при этом сохранён ввод точного имени.
-- В список БД добавлен выровненный столбец занимаемого пространства, рассчитанного через `pg_database_size` и представленного функцией `pg_size_pretty`.
-- По умолчанию предлагается номер БД с именем кластера, а при её отсутствии — номер первой БД из полученного списка.
-- Горячий дамп создаётся штатным `pg_dump` выбранной версии без остановки кластера.
-- Внешний архив получает имя `{версия}-{БД}-YYYYMMDD-hhmmss-dmp.tar.gz`.
-- В архив помещаются custom-format дамп `{версия}-{БД}-YYYYMMDD-hhmmss-dmp.backup` и отдельный `backup-info.env`.
-- Метаданные горячего бэкапа содержат имя исходного хоста, дату, версию PostgreSQL, имя и порт исходного кластера, имя БД, её точный размер в байтах и читаемый размер `pg_size_pretty` на момент завершения дампа.
-- Для автоматизации добавлены `--backup-type`, `--database`, `PGCC_BACKUP_TYPE` и `PGCC_DATABASE`.
+- Added backup menu choices “1 — hot” and “2 — cold”, with cold as the default.
+- After selecting hot backup, added interactive selection of an existing database by number or name.
+- Fixed numbered-list handling: input `2` now selects the second database rather than being validated as the literal database name `2`.
+- Made number-based selection the primary interactive method while retaining exact-name input.
+- Added an aligned database-size column, calculated through `pg_database_size` and formatted with `pg_size_pretty`.
+- The default is the number of the database matching the cluster name, or the first database in the returned list if no match exists.
+- Hot dumps use the selected version's native `pg_dump` without stopping the cluster.
+- The outer archive is named `{version}-{database}-YYYYMMDD-hhmmss-dmp.tar.gz`.
+- The archive contains custom-format dump `{version}-{database}-YYYYMMDD-hhmmss-dmp.backup` and a separate `backup-info.env`.
+- Hot-backup metadata includes source hostname, date, PostgreSQL version, source cluster name/port, database name, and its exact byte size and human-readable `pg_size_pretty` size at dump completion.
+- Added `--backup-type`, `--database`, `PGCC_BACKUP_TYPE`, and `PGCC_DATABASE` for automation.
 
-### Восстановление
+### Restore
 
-- Список рестори фильтруется по строгим форматам холодных и горячих архивов; посторонние `.tar.gz` не отображаются.
-- Добавлено автоматическое определение горячего архива по суффиксу `-dmp.tar.gz`.
-- Рестори принимает новые горячие архивы с метаданными и сохраняет совместимость со старыми архивами, содержащими только дамп.
-- Для горячего рестори добавлены нумерованный выбор целевого кластера и интерактивный выбор целевой БД.
-- Перед горячим бэкапом и рестори выводится нумерованный список подключаемых пользовательских баз выбранного кластера; существующая БД выбирается номером или именем.
-- При рестори вместо пункта списка можно ввести имя отсутствующей БД, которая будет создана перед восстановлением.
-- Если исходная БД горячего бэкапа уже существует в целевом кластере, её номер предлагается по умолчанию; иначе предлагается исходное имя для создания новой БД.
-- После выбора БД из уже загруженного списка устранена лишняя повторная проверка каталога при горячем бэкапе.
-- Имена БД поддерживают латинские буквы, цифры, точку, дефис и подчёркивание, включая варианты наподобие `asvd-old`.
-- Если целевая БД горячего рестори отсутствует, она создаётся версионной `createdb` после подтверждения операции; владельцем назначается найденная в дампе прикладная роль либо `postgres`, если такой роли нет.
-- Для новой БД `pg_restore` запускается без очистки; `overwrite=yes` требуется только для существующей БД.
-- Перед горячим рестори из оглавления дампа определяются роли-владельцы объектов.
-- Отсутствующие роли-владельцы создаются с административными атрибутами и паролем, совпадающим с именем роли; существующие роли не изменяются.
-- Владельцем новой целевой БД назначается найденная в дампе прикладная роль администратора, либо `postgres`, если прикладного владельца в дампе нет.
-- Дамп восстанавливается версионным `pg_restore --exit-on-error` в работающий кластер; для существующей БД дополнительно применяются `--clean --if-exists`.
-- Интерактивное удаление существующих объектов требует подтверждения с отрицательным ответом по умолчанию; неинтерактивный горячий рестори требует `--overwrite yes`.
-- Добавлен выбор бэкапа из настроенного каталога.
-- Добавлены запросы имени и порта целевого кластера с исходными значениями из бэкапа по умолчанию.
-- Реализована проверка нового имени и порта на конфликты с существующими кластерами.
-- При восстановлении под новым именем переименовываются пути конфигурации, данных, журнала и systemd unit; обновляются `cluster_name` и порт.
-- Для нового имени обновляется `external_pid_file`, чтобы systemd unit не оставался в состоянии `activating` после фактического запуска PostgreSQL.
-- Ожидание запуска ограничено 60 секундами; на штатной Astra проверяются состояния `online` и `active`, в WSL — фактическое состояние `online` после прямого запуска.
-- Для повторного рестори добавлена ограниченная по времени прямая остановка кластера и синхронизация зависшего состояния systemd.
-- В WSL запуск кластера переведён на `pg_ctlcluster --skip-systemctl-redirect`: команда больше не зависает при перенаправлении в неготовый systemd; успех подтверждается по фактическому состоянию `online`.
-- Реализовано чтение и проверка метаданных архива.
-- При необходимости устанавливается серверный пакет, записанный в бэкапе.
-- Холодный рестори поверх существующего кластера запрещён: интерактивный режим выводит `АЛАРМ` и повторяет запрос имени, неинтерактивный завершается с ошибкой до распаковки.
-- Проверяются не только записи `pg_lsclusters`, но также оставшиеся каталоги конфигурации и данных, активный и сохранённый systemd unit.
-- Проверка свободного целевого имени повторяется непосредственно перед распаковкой архива.
-- Исправлено определение фактического systemd unit в `/etc`, `/usr/lib` или `/lib/systemd/system`; новые холодные архивы включают найденный файл.
-- Добавлена совместимость со старыми холодными архивами без unit-файла: при рестори создаётся новый unit с целевым именем и каталогом данных.
-- Восстанавливаются исходные абсолютные пути, systemd unit и настройки кластера.
-- При восстановлении сохраняются существующие симлинки каталогов; содержимое архива помещается в каталог, на который указывает ссылка.
-- Перед распаковкой проверяется, что все пути архива находятся под служебным префиксом `root/` и не содержат выхода через `..`.
-- После восстановления выполняются `daemon-reload`, включение службы и запуск кластера.
+- Filtered the restore list by strict cold/hot archive naming formats; unrelated `.tar.gz` files are not displayed.
+- Added automatic hot-archive detection through the `-dmp.tar.gz` suffix.
+- Restore accepts new hot archives with metadata and remains compatible with older dump-only archives.
+- Added numbered target-cluster selection and interactive target-database selection for hot restore.
+- Before hot backup and restore, displayed a numbered list of connectable user databases in the selected cluster; an existing database is selected by number or name.
+- During restore, an absent database name may be entered instead of a list item; that database is created before restoration.
+- If the hot backup's source database already exists in the target cluster, its number is offered by default; otherwise, the source name is offered for creating a new database.
+- Removed a redundant database-catalog recheck during hot backup after selecting a database from an already loaded list.
+- Database names support Latin letters, digits, periods, hyphens, and underscores, including names such as `asvd-old`.
+- If the hot-restore target database is absent, the version-specific `createdb` creates it after confirmation. Its owner is the application role found in the dump, or `postgres` if no such role exists.
+- For a new database, `pg_restore` runs without cleanup; `overwrite=yes` is required only for an existing database.
+- Before hot restore, object-owner roles are determined from the dump table of contents.
+- Missing owner roles are created with administrative attributes and a password equal to the role name; existing roles are unchanged.
+- The new target database is owned by the application administrator role found in the dump, or `postgres` if the dump contains no application owner.
+- The dump is restored into a running cluster with the version-specific `pg_restore --exit-on-error`; existing databases additionally use `--clean --if-exists`.
+- Interactive deletion of existing objects requires confirmation defaulting to no; non-interactive hot restore requires `--overwrite yes`.
+- Added backup selection from the configured directory.
+- Added target cluster-name and port prompts defaulting to values from the backup.
+- Implemented checks for new-name and port conflicts with existing clusters.
+- Restoring under a new name renames configuration, data, log, and systemd unit paths and updates `cluster_name` and the port.
+- Updated `external_pid_file` for the new name so the systemd unit does not remain `activating` after PostgreSQL has actually started.
+- Startup waiting is limited to 60 seconds; native Astra checks `online` and `active`, while WSL checks actual `online` state after direct startup.
+- For repeated restore, added a bounded direct cluster stop and synchronization of stuck systemd state.
+- WSL cluster startup uses `pg_ctlcluster --skip-systemctl-redirect`: the command no longer hangs when redirected to an unready systemd; success is confirmed by actual `online` state.
+- Implemented archive metadata reading and validation.
+- Installs the server package recorded in the backup when needed.
+- Cold restore over an existing cluster is forbidden: interactive mode displays `АЛАРМ` (ALARM) and repeats the name prompt; non-interactive mode exits with an error before extraction.
+- Checks cover not only `pg_lsclusters` entries but also leftover configuration/data directories and active/saved systemd units.
+- Target-name availability is rechecked immediately before archive extraction.
+- Fixed actual systemd-unit discovery under `/etc`, `/usr/lib`, or `/lib/systemd/system`; new cold archives include the discovered file.
+- Added compatibility with old cold archives lacking a unit file: restore creates a new unit with the target name and data directory.
+- Restored original absolute paths, systemd unit, and cluster settings.
+- Existing directory symlinks are preserved during restore; archive contents are written to the link target directory.
+- Before extraction, all archive paths are checked to remain beneath the `root/` prefix and contain no `..` traversal.
+- After restore, runs `daemon-reload`, enables the service, and starts the cluster.
 
-### Совместимость
+### Compatibility
 
-- Сценарий написан для Bash 4.4 и утилит GNU, доступных в Astra Linux SE 1.6.
-- Добавлена возможность безопасно подключать сценарий через `source` для функциональных тестов без автоматического запуска `main`.
-- Добавлено определение WSL без устройства PARSEC и точечная фильтрация нефатального предупреждения `Не удается открыть файл управления PARSEC.`; остальные ошибки и коды завершения команд сохраняются.
+- The script targets Bash 4.4 and GNU utilities available in Astra Linux SE 1.6.
+- Added safe inclusion through `source` for functional tests without automatically calling `main`.
+- Added WSL detection when the PARSEC device is absent and targeted filtering of the nonfatal warning `Не удается открыть файл управления PARSEC.` (“Cannot open the PARSEC control file”); other errors and command exit codes are preserved.
 
-### Сборка DEB-пакетов
+### DEB package builds
 
-- Добавлен сценарий `create-deb.sh` версии `1.2.0` со справкой `--help` и выводом версии через `--version`.
-- Сборка использует пользовательский скелет `tmp/rootFs`, временный каталог внутри `tmp` и каталог результатов `dist`.
-- В пакет помещаются конфиг, основной сценарий и Markdown-документация; создаётся симлинк `/usr/local/bin/create-claster.sh`.
-- Реализованы четыре режима: установка сценариев, создание пустого кластера, холодный рестори кластера и создание кластера с горячим рестори БД.
-- Для режимов 3 и 4 добавлены обязательная проверка типа/версии архива и включение бэкапа в пакет.
-- Добавлено формирование имён пакетов по режиму, семейству PostgreSQL, версии, кластеру и БД.
-- Во всех пакетах объявлена зависимость от `postgresql-common`; режимы 2–4 дополнительно зависят от выбранного серверного пакета, а PostgreSQL Pro — от соответствующего `contrib`.
-- Автоматическое развёртывание выполняется неинтерактивным `postinst` после установки зависимостей; маркеры состояния защищают от повторного применения операций.
-- `.new-claster.config` зарегистрирован как `conffile` и устанавливается с правами `0600`.
-- Для старого `dpkg-deb` Astra Linux и каталога Windows добавлен автоматический запуск сборочной части через `fakeroot`, обеспечивающий владельца `root:root` и корректные права.
-- В режимах сборки 2–4 интерактив включён по умолчанию; для автоматизации добавлен явный ключ `--non-interactive`.
-- Для режимов 3–4 добавлен нумерованный общий список бэкапов из `backup_dir`/`--backup-dir` с отображением автоматически определённого холодного или горячего типа.
-- Добавлены безопасное чтение и выровненный вывод метафайла бэкапа без исполнения его содержимого.
-- В интерактиве уточняются семейство и пакет сервера, версия, имя и порт кластера, схема, пользователь, пароль, целевая БД и размещение данных в зависимости от режима.
-- Холодный бэкап сохраняет исходные версию и серверный пакет; целевое имя, порт и размещение можно изменить.
-- Для холодного рестори добавлен выбор исходного, дефолтного или пользовательского размещения; при необходимости `postinst` выполняет возобновляемое перемещение через `create-claster.sh --action move-data`.
-- Маркеры `postinst` разделены по этапам создания/рестори кластера и перемещения данных, поэтому повторная конфигурация продолжает незавершённую операцию.
-- В `create-claster.sh` и `create-deb.sh` добавлены подробные англоязычные заголовочные комментарии с автором, назначением, ключами, аргументами и переменными окружения.
-- Автор `Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>` добавлен в поля `Maintainer` и `Description/Author` создаваемого DEB-пакета.
-- Запуск `create-deb.sh` без ключей переведён на интерактивный нумерованный выбор режима 1–4; для прямой сборки прежнего пакета со сценариями используется явный `--mode 1`.
-- Для режимов 2–4 добавлен повторяемый ключ `--depends` с поддержкой списка дополнительных DEB-зависимостей через запятую, удалением дубликатов и отдельным интерактивным запросом.
+- Added `create-deb.sh` version `1.2.0`, with `--help` and version output through `--version`.
+- Builds use a user-provided `tmp/rootFs` skeleton, a temporary directory inside `tmp`, and output directory `dist`.
+- Packages include the configuration, main script, and Markdown documentation, and create symlink `/usr/local/bin/create-claster.sh`.
+- Implemented four modes: scripts installation, empty-cluster creation, cold cluster restore, and cluster creation with hot database restore.
+- Modes 3 and 4 require archive type/version validation and embed the backup in the package.
+- Added package naming based on mode, PostgreSQL family, version, cluster, and database.
+- Every package declares a dependency on `postgresql-common`; modes 2–4 additionally depend on the selected server package and, for PostgreSQL Pro, matching `contrib`.
+- Automatic deployment runs through a non-interactive `postinst` after dependency installation; state markers prevent operations from being reapplied.
+- `.new-claster.config` is registered as a `conffile` and installed with mode `0600`.
+- For older Astra Linux `dpkg-deb` and Windows directories, added automatic execution of the build stage through `fakeroot`, ensuring `root:root` ownership and correct permissions.
+- Build modes 2–4 are interactive by default; added explicit `--non-interactive` for automation.
+- For modes 3–4, added a shared numbered backup list from `backup_dir`/`--backup-dir`, displaying the automatically detected cold/hot type.
+- Added safe reading and aligned display of backup metadata without executing its contents.
+- Depending on the mode, interactive prompts refine server family/package, version, cluster name/port, schema, user, password, target database, and data placement.
+- Cold backups retain their source version and server package; target name, port, and placement can be changed.
+- Cold restore can use source, default, or custom placement; when needed, `postinst` performs resumable relocation through `create-claster.sh --action move-data`.
+- Split `postinst` markers into cluster creation/restore and data-relocation stages so reconfiguration continues unfinished work.
+- Added detailed English header comments to `create-claster.sh` and `create-deb.sh`, documenting author, purpose, options, arguments, and environment variables.
+- Added author `Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>` to the generated DEB's `Maintainer` and `Description/Author` fields.
+- Changed argument-free `create-deb.sh` startup to interactive numbered mode selection 1–4; direct building of the previous scripts-only package now uses explicit `--mode 1`.
+- For modes 2–4, added repeatable `--depends` with comma-separated additional DEB dependencies, deduplication, and a separate interactive prompt.
 
 ## 1.1.0 — 2026-09-05
 
-Первое минорное расширение сценария управления кластерами, сохранённое тегом `v1.1.0`.
+First minor extension of the cluster-management script, preserved by tag `v1.1.0`.
 
-- Добавлены отдельные действия переключения TCP-порта и перемещения каталога данных.
-- Реализовано удаление отдельной БД через интерактивный выбор кластера и базы.
-- Расширены горячие и холодные бэкапы, метаданные, размеры БД и каталога данных.
-- Усилена безопасность холодного рестори, переименования кластера и обработки systemd unit.
-- Добавлены пользовательские пути данных, цветные списки кластеров и тихая подготовка.
-- Исправлены запуск PostgreSQL и фильтрация предупреждения PARSEC в WSL.
+- Added separate TCP port-switching and data-directory relocation actions.
+- Implemented individual database deletion through interactive cluster/database selection.
+- Expanded hot/cold backups, metadata, and database/data-directory size reporting.
+- Strengthened safety of cold restore, cluster renaming, and systemd-unit handling.
+- Added custom data paths, colored cluster lists, and quiet preparation.
+- Fixed PostgreSQL startup and PARSEC warning filtering in WSL.
 
 ## 1.0.0 — 2026-09-05
 
-Первая зафиксированная версия сценария.
+First recorded script version.
 
-- Реализованы подготовка APT-пакетов, выбор серверной поставки и создание структуры `/.postgres`.
-- Добавлены установка, просмотр, холодный и горячий бэкап, рестори и удаление PostgreSQL-кластеров.
-- Общие настройки вынесены в `.new-claster.config`; параметры поддерживаются также через аргументы и переменные окружения.
-- Добавлены метаданные резервных копий, работа с симлинками, systemd unit и совместимость с Astra Linux в WSL.
-- Исходное состояние выпуска сохранено тегом `v1.0.0` и веткой `release/1.0.0`.
+- Implemented APT package preparation, server-distribution selection, and creation of the `/.postgres` layout.
+- Added PostgreSQL cluster installation, inspection, cold/hot backup, restore, and deletion.
+- Moved common settings into `.new-claster.config`; parameters are also supported through arguments and environment variables.
+- Added backup metadata, symlink handling, systemd units, and compatibility with Astra Linux in WSL.
+- Preserved the original release state with tag `v1.0.0` and branch `release/1.0.0`.

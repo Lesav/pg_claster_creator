@@ -3,6 +3,7 @@
 /LICENSE text eol=lf
 /.new-claster.config text eol=lf
 /CHANGELOG.md text eol=lf
+/CHANGELOG_ru.md text eol=lf
 /README.md text eol=lf
 /TEST.md text eol=lf
 /TEST-*-journal-passed.md text eol=lf
