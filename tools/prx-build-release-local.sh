@@ -11,6 +11,7 @@
 #   The selected file is copied to staging and passed explicitly to the builder,
 #   so a system config cannot replace the distribution config.
 # Output: verified gzip-only DEB in REPO/dist; no package installation.
+#   Requires REPO/LICENSE; verifies both installed license copies and mode 0644.
 # Example: bash tools/prx-build-release-local.sh /mnt/d/Ai/pg_claster_creator 2.2.0 2.1.2
 set -Eeuo pipefail
 repo="$1"; version="$2"
@@ -23,6 +24,7 @@ trap 'rm -rf -- "$stage"' EXIT
 for f in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
     cp -- "$repo/$f" "$stage/$f"
 done
+cp -- "$repo/LICENSE" "$stage/LICENSE"
 while IFS= read -r -d '' document; do
     cp -- "$document" "$stage/${document##*/}"
 done < <(find "$repo" -maxdepth 1 -type f -name '*.md' -print0)
@@ -50,6 +52,10 @@ package="$repo/dist/claster-creator-$version.deb"
 [[ "$(ar t "$package")" == $'debian-binary\ncontrol.tar.gz\ndata.tar.gz' ]]
 [[ "$(dpkg-deb -f "$package" Version)" == "$version" ]]
 dpkg-deb --fsys-tarfile "$package" > "$stage/payload.tar"
+for member in ./usr/local/share/pg_claster_creator/LICENSE ./usr/share/doc/claster-creator/copyright; do
+    tar -xOf "$stage/payload.tar" "$member" | cmp - "$repo/LICENSE"
+    tar -tvf "$stage/payload.tar" "$member" | grep -q '^-rw-r--r-- root/root '
+done
 while IFS= read -r -d '' document; do
     member="./usr/local/share/pg_claster_creator/${document##*/}"
     tar -xOf "$stage/payload.tar" "$member" > "$stage/extracted-markdown"

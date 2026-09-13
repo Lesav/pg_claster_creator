@@ -40,6 +40,6 @@ finish() {
     ((rc==0 && clean==0))
 }
 trap finish EXIT
-cp -a "$repo/"create-claster*.sh "$repo/.new-claster.config" "$repo/man" "$build/"
+cp -a "$repo/"create-claster*.sh "$repo/.new-claster.config" "$repo/LICENSE" "$repo/man" "$build/"
 find "$repo" -maxdepth 1 -type f -name '*.md' -exec cp -t "$build" -- {} +
 PGCC_LIVE_WORKSPACE=1 PGCC_LIVE_BUILDER="$build/create-claster-deb.sh" PGCC_LIVE_BACKUP_ROOT="$output" PGCC_LIVE_EXTENSION="$repo/tools/prx-test-live-config-env.sh" bash "$repo/tools/prx-test-live-regression.sh" "$repo" "$distro" "$v" "$package" "$family" "$port" "$release" "$output" extension

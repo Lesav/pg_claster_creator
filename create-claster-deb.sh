@@ -2,6 +2,9 @@
 
 # ==============================================================================
 # Script: create-claster-deb.sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Andrei Lesnykh
+# License: See LICENSE distributed with this script.
 # Author: Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>
 #
 # Purpose:
@@ -31,6 +34,8 @@
 #   the same share directory with mode 0644. Subdirectories (including tests)
 #   and symlinks are not traversed. No particular passed journal is required.
 #   Included journal statuses are evidence, not a claim that all tests passed.
+#   All modes require the adjacent LICENSE and install its unchanged MIT text
+#   both beside the scripts and as /usr/share/doc/claster-creator/copyright.
 #
 # Package modes accepted by --mode:
 #   1  Install scripts, configuration, documentation, and the command symlink.
@@ -1823,6 +1828,12 @@ build_package() {
     install -m 0755 -- "${SCRIPT_DIR}/create-claster-backup.sh" "${payload_dir}/create-claster-backup.sh"
     install -m 0755 -- "${SCRIPT_DIR}/create-claster-deb.sh" "${payload_dir}/create-claster-deb.sh"
     install_markdown_files "${payload_dir}"
+    # Keep the license beside the installed builder for subsequent rebuilds.
+    [[ -f "${SCRIPT_DIR}/LICENSE" && -r "${SCRIPT_DIR}/LICENSE" ]] || die \
+        "не найден или недоступен файл лицензии ${SCRIPT_DIR}/LICENSE"
+    install -m 0644 -- "${SCRIPT_DIR}/LICENSE" "${payload_dir}/LICENSE"
+    install -D -m 0644 -- "${SCRIPT_DIR}/LICENSE" \
+        "${BUILD_ROOT}/usr/share/doc/claster-creator/copyright"
     ln -s -- "${INSTALL_DIR}/create-claster.sh" "${BUILD_ROOT}${COMMAND_LINK}"
     ln -s -- "${INSTALL_DIR}/create-claster-backup.sh" "${BUILD_ROOT}${BACKUP_COMMAND_LINK}"
     printf '%s\n' "${INSTALL_DIR}/.new-claster.config" >"${BUILD_ROOT}/DEBIAN/conffiles"

@@ -30,7 +30,7 @@ if [[ "${6:-}" != prepared ]]; then
 fi
 buildsrc="/var/tmp/pgcc-buildsrc-$port"
 [[ ! -e "$buildsrc" ]]; mkdir -m 0755 "$buildsrc"
-cp -a "$repo/"create-claster*.sh "$repo/.new-claster.config" "$repo/man" "$buildsrc/"
+cp -a "$repo/"create-claster*.sh "$repo/.new-claster.config" "$repo/LICENSE" "$repo/man" "$buildsrc/"
 find "$repo" -maxdepth 1 -type f -name '*.md' -exec cp -t "$buildsrc" -- {} +
 export PGCC_LIVE_WORKSPACE=1 PGCC_PREFLIGHT_WORKSPACE=1
 export PGCC_LIVE_BUILDER="$buildsrc/create-claster-deb.sh" PGCC_LIVE_BACKUP_ROOT="$base"

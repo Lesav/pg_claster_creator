@@ -19,7 +19,7 @@ cleanup() {
 }
 trap cleanup EXIT
 export QA_SQL_WORK="$work"
-cp "$repo"/create-claster*.sh "$repo"/.new-claster.config "$work/"
+cp "$repo"/create-claster*.sh "$repo"/.new-claster.config "$repo/LICENSE" "$work/"
 while IFS= read -r -d '' document; do
     cp -- "$document" "$work/${document##*/}"
 done < <(find "$repo" -maxdepth 1 -type f -name '*.md' -print0)

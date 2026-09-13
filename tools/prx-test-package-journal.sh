@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Purpose: verify all root Markdown is packaged and archived journals are excluded.
+#   Also verify both MIT license copies and reject builds without LICENSE.
 # Usage: bash tools/prx-test-package-journal.sh REPO VERSION LEGACY_JOURNAL LOG_DIR
 # Args: REPO -- source root; VERSION -- expected version; LEGACY_JOURNAL -- ignored;
 #   LOG_DIR -- new evidence/output directory. Run on Linux as root or with fakeroot.
@@ -13,7 +14,8 @@ exec >"$logs/check.log" 2>&1
 work="$(mktemp -d /tmp/pgcc-journal-check.XXXXXX)"
 trap 'rm -rf -- "$work"' EXIT
 stage="$work/source"; mkdir "$stage"
-cp "$repo"/create-claster*.sh "$repo/.new-claster.config" "$stage/"
+cp "$repo"/create-claster*.sh "$repo/.new-claster.config" "$repo/LICENSE" "$stage/"
+export PGCC_CFG="$stage/.new-claster.config"
 cp -R "$repo/man" "$stage/man"
 while IFS= read -r -d '' document; do
     cp -- "$document" "$stage/${document##*/}"
@@ -31,6 +33,12 @@ verify_package() {
     [[ "$(dpkg-deb -f "$package" Version)" == "$release" ]]
     dpkg-deb --fsys-tarfile "$package" >"$work/payload.tar"
     tar -tf "$work/payload.tar" >"$work/manifest"
+    for member in ./usr/local/share/pg_claster_creator/LICENSE ./usr/share/doc/claster-creator/copyright; do
+        tar -xOf "$work/payload.tar" "$member" >"$work/extracted"
+        cmp "$stage/LICENSE" "$work/extracted"
+        tar -tvf "$work/payload.tar" "$member" >"$work/entry"
+        grep -q '^-rw-r--r-- root/root ' "$work/entry"
+    done
     while IFS= read -r -d '' document; do
         member="./usr/local/share/pg_claster_creator/${document##*/}"
         tar -xOf "$work/payload.tar" "$member" >"$work/extracted"
@@ -68,4 +76,13 @@ for mode in 2 3 4 5; do
     verify_package "$logs/artifacts/markdown-mode-$mode.deb"
     [[ ! -e "$stage/tmp" ]]
 done
+
+# A missing source license must prevent packaging, including in scripts-only mode.
+mv "$stage/LICENSE" "$work/LICENSE.saved"
+if bash "$stage/create-claster-deb.sh" --mode 1 --non-interactive --output-dir "$logs/missing-license" >"$work/missing-license.log" 2>&1; then
+    printf 'FAIL: build succeeded without LICENSE\n'; exit 1
+fi
+grep -Fq 'не найден или недоступен файл лицензии' "$work/missing-license.log"
+[[ ! -e "$logs/missing-license/claster-creator-$release.deb" && ! -e "$stage/tmp" ]]
+printf 'PASS: missing LICENSE rejected; no package or temporary build tree left\n'
 printf 'PASS Markdown packaging modes 1-5; no historical passed journal required\n'

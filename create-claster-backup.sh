@@ -2,6 +2,9 @@
 
 # ==============================================================================
 # Script: create-claster-backup.sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Andrei Lesnykh
+# License: See LICENSE distributed with this script.
 # Author: Andrei Lesnykh (AO NIKIET) <lesnyx@ya.ru>
 #
 # Purpose:
