@@ -2,7 +2,7 @@
 
 Manage PostgreSQL clusters on Astra Linux and compatible Debian-based systems using interactive Bash menus or command-line automation. Build Debian packages that install the tools and optionally deploy a cluster, restore a backup, or initialize a database from SQL.
 
-**Version:** 2.5.4 · **Language:** English | [Русский](README_ru.md)
+**Version:** 2.5.5 · **Language:** English | [Русский](README_ru.md)
 
 The spelling `claster` is retained in project, command, and package names for compatibility. Interactive messages and `--help` output are currently in Russian; script headers and manual pages include English documentation.
 
@@ -183,12 +183,12 @@ bash ./create-claster-deb.sh --config ./.new-claster.config \
   --mode 1 --non-interactive
 ```
 
-The output is `dist/claster-creator-2.5.4.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI checks and builds the package, retains it as a job artifact, and publishes DEB/checksum attachments for matching `vX.Y.Z` tags. See [CI and release builds](CI.md) for runner requirements and verification scope.
+The output is `dist/claster-creator-2.5.5.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI checks and builds the package, retains it as a job artifact, and publishes DEB/checksum attachments for matching `vX.Y.Z` tags. See [CI and release builds](CI.md) for runner requirements and verification scope.
 
 Install this scripts-only package on a host with the required repositories configured:
 
 ```bash
-sudo apt install ./dist/claster-creator-2.5.4.deb
+sudo apt install ./dist/claster-creator-2.5.5.deb
 ```
 
 | Mode | Action when the package is installed |

@@ -4,10 +4,12 @@ All significant project changes are recorded in this file.
 
 [Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
 
-## Unreleased
+## 2.5.5 — 2026-09-14
 
 - The GitFlic release publisher now requires a separate secret `GITFLIC_RELEASE_TOKEN` (user API token). It neither uses nor changes `CI_JOB_TOKEN` and fails before API requests when the release token is missing or invalid. Added offline authentication-isolation tests and CI setup instructions; PostgreSQL scripts and their interfaces are unchanged.
-- Confirmed user-token release creation with an author and explicit tag-pipeline start on GitFlic 4.5.0. DEB attachments remain blocked by the server's compiled MIME allowlist; end-to-end automatic publication is not yet confirmed.
+- Confirmed CI publication and SHA-256 download verification of the original 2.5.4 DEB and SHA256SUMS in the temporary GitFlic project (pipeline 18, publication job 27). The server MIME restriction was fixed in a separate custom GitFlic image, not in this package; stock GitFlic 4.5.0 still requires that server-side support.
+- Documented masked release credentials, retry behavior, manual tag-pipeline start when tag push does not trigger CI, and migration without temporary diagnostic branches. Existing v2.5.4 is unchanged.
+- Aligned script versions, README examples and man headers. No cluster-management or CLI/ENV behavior changed; the 2.5.3 test journal retains only its original coverage. No new full cluster run is claimed.
 
 ## 2.5.4 — 2026-09-13
 
