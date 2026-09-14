@@ -183,7 +183,7 @@ bash ./create-claster-deb.sh --config ./.new-claster.config \
   --mode 1 --non-interactive
 ```
 
-The output is `dist/claster-creator-2.5.5.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI checks and builds the package, retains it as a job artifact, and publishes DEB/checksum attachments for matching `vX.Y.Z` tags. See [CI and release builds](CI.md) for runner requirements and verification scope.
+The output is `dist/claster-creator-2.5.5.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI and GitHub Actions check and build the package, retain it as a job artifact, and publish DEB/checksum attachments for matching `vX.Y.Z` tags. GitHub Actions uses a hosted Ubuntu runner and the automatic job token. See [CI and release builds](CI.md) for requirements, release guards and verification scope.
 
 Install this scripts-only package on a host with the required repositories configured:
 

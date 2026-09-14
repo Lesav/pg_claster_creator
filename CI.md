@@ -1,4 +1,46 @@
-# GitFlic CI and release builds
+# CI and release builds
+
+## GitHub Actions
+
+`.github/workflows/deb-release.yml` runs on GitHub-hosted Ubuntu 24.04:
+
+- Pushes to `master` / `release/**` and pull requests run offline publisher tests,
+  Bash syntax checks and the existing scripts-only DEB build/content verification.
+- Pushing a new `vX.Y.Z` tag also publishes the DEB and `SHA256SUMS` to GitHub Releases.
+  The tag must match the script version and the exact build commit on GitHub.
+- **Actions → DEB build and release → Run workflow** builds a selected branch
+  without publishing. A dispatch explicitly targeting a tag publishes only when
+  that tag already contains this workflow and the publisher helpers.
+- Build outputs, `build.log` and `package-contents.txt` are retained as artifacts
+  for 30 days. Release attachments have independent retention; `dist/` stays out of Git.
+
+No self-hosted runner or personal token is required. Only the publish job receives
+`contents: write`, with the job's automatic `GITHUB_TOKEN` passed as `GH_TOKEN`.
+Build/PR jobs have `contents: read`; checkout credentials are not persisted.
+Actions are pinned to full commit SHAs. There is no `pull_request_target` or
+execution of cluster tests. Sudo only installs packaging dependencies in the
+disposable GitHub-hosted VM; the generated DEB is never installed.
+
+The GitHub publisher reuses the existing changelog extractor. It verifies the
+manifest, resolves the remote tag commit, preserves existing release descriptions,
+refuses existing drafts/prereleases and checks all name collisions before upload.
+Equal assets are reused; different assets fail without deletion or `--clobber`.
+Every uploaded/reused asset is downloaded and compared by SHA-256. Retrying the
+publish job uses the same retained build artifact; rerunning the full build may
+produce different archive timestamps and therefore a checksum conflict. Do not
+overwrite an existing release to address that conflict.
+
+The manually created GitHub `v2.5.5` release and its `.deb` / `.sha256` attachments
+are left unchanged. Old tags do not gain a workflow retroactively. Publish the
+next reviewed version with a new tag; never move `v2.5.5` to add CI.
+
+Offline GitHub publisher checks:
+
+```bash
+python3 -B tools/prx-test-github-publisher.py
+```
+
+## GitFlic CI
 
 The root `gitflic-ci.yaml` targets GitFlic / Runner 4.5.0 and a **Shell** runner
 with the `pgcc-deb` tag. Jobs without tags should be disabled for this runner.

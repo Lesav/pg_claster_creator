@@ -4,6 +4,10 @@ All significant project changes are recorded in this file.
 
 [Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
 
+## Unreleased
+
+- Added GitHub Actions for non-destructive DEB verification and tag-triggered release uploads with the automatic job token. Pinned actions, read-only PR builds, SHA-256 download verification, and refusal to overwrite conflicting assets. Existing releases/tags and PostgreSQL behavior are unchanged.
+
 ## 2.5.5 — 2026-09-14
 
 - The GitFlic release publisher now requires a separate secret `GITFLIC_RELEASE_TOKEN` (user API token). It neither uses nor changes `CI_JOB_TOKEN` and fails before API requests when the release token is missing or invalid. Added offline authentication-isolation tests and CI setup instructions; PostgreSQL scripts and their interfaces are unchanged.

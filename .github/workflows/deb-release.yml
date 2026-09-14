@@ -1,0 +1,71 @@
+name: DEB build and release
+
+on:
+  push:
+    branches: [master, 'release/**']
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [master, 'release/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deb-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fakeroot binutils dpkg-dev
+      - name: Offline publisher tests
+        run: |
+          python3 -B tools/prx-test-gitflic-publisher.py tools/prx-publish-gitflic-release.py
+          python3 -B tools/prx-test-github-publisher.py
+      - name: Build and verify scripts-only DEB
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$REF_TYPE" == tag ]]; then
+            [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+            export CI_COMMIT_TAG="$REF_NAME"
+          fi
+          bash tools/prx-ci-build.sh
+          (cd dist && sha256sum -c SHA256SUMS)
+      - name: Keep build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deb-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: build
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deb-${{ github.sha }}
+          path: dist/
+      - name: Publish and verify release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/prx-publish-github-release.py --dist dist --notes CHANGELOG.md
