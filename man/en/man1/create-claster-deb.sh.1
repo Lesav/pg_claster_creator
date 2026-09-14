@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-14" "pg_claster_creator 2.5.5" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-14" "pg_claster_creator 2.5.6" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -261,9 +261,10 @@ claster-creator-VERSION-PG-PGVER-CLUSTER-DATABASE.deb
 .SH FILES
 .TP
 .I /usr/local/share/pg_claster_creator/*.md
-Every regular .md file directly beside the builder is installed in every mode
-with permissions 0644, including hidden names and spaces. Subdirectories such
-as tests and symlinks are not traversed. No particular passed journal is required.
+Only README.md, README_ru.md, CHANGELOG.md, CHANGELOG_ru.md and the latest
+available TEST-X.Y.Z-journal-passed.md (numeric version order) are installed
+with permissions 0644. Missing documents are optional. CI.md, TEST.md, other
+Markdown files, subdirectories and symlinks are excluded.
 Included journal statuses are preserved; inclusion does not imply a passed test.
 .TP
 .I /usr/local/share/pg_claster_creator/create-claster-deb.sh

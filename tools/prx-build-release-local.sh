@@ -11,6 +11,7 @@
 #   The selected file is copied to staging and passed explicitly to the builder,
 #   so a system config cannot replace the distribution config.
 # Output: verified gzip-only DEB in REPO/dist; no package installation.
+#   Verifies only the four README/CHANGELOG files and latest available passed journal.
 #   Requires REPO/LICENSE; verifies both installed license copies and mode 0644.
 # Example: bash tools/prx-build-release-local.sh /mnt/d/Ai/pg_claster_creator 2.2.0 2.1.2
 set -Eeuo pipefail
@@ -57,14 +58,22 @@ for member in ./usr/local/share/pg_claster_creator/LICENSE ./usr/share/doc/clast
     tar -xOf "$stage/payload.tar" "$member" | cmp - "$repo/LICENSE"
     tar -tvf "$stage/payload.tar" "$member" | grep -q '^-rw-r--r-- root/root '
 done
-while IFS= read -r -d '' document; do
+markdown=(README.md README_ru.md CHANGELOG.md CHANGELOG_ru.md)
+latest="$(find "$repo" -maxdepth 1 -type f -name 'TEST-*-journal-passed.md' -printf '%f\n' | grep -E '^TEST-[0-9]+\.[0-9]+\.[0-9]+-journal-passed\.md$' | LC_ALL=C sort -V | tail -n 1 || true)"
+[[ -z "$latest" ]] || markdown+=("$latest")
+expected_markdown=0
+for name in "${markdown[@]}"; do
+    document="$repo/$name"
+    [[ -f "$document" && ! -L "$document" ]] || continue
+    expected_markdown=$((expected_markdown + 1))
     member="./usr/local/share/pg_claster_creator/${document##*/}"
     tar -xOf "$stage/payload.tar" "$member" > "$stage/extracted-markdown"
     cmp "$stage/extracted-markdown" "$document"
     tar -tvf "$stage/payload.tar" "$member" | tee "$stage/entry"
     grep -q '^-rw-r--r-- root/root ' "$stage/entry"
-done < <(find "$repo" -maxdepth 1 -type f -name '*.md' -print0)
+done
 tar -tf "$stage/payload.tar" > "$stage/payload.list"
+[[ "$(grep -Ec '^\./usr/local/share/pg_claster_creator/[^/]+\.md$' "$stage/payload.list")" == "$expected_markdown" ]]
 ! grep -q '/tests/' "$stage/payload.list"
 tar -xOf "$stage/payload.tar" ./usr/local/share/pg_claster_creator/.new-claster.config > "$stage/extracted-config"
 cmp "$stage/extracted-config" "$config_source"
@@ -82,4 +91,4 @@ for language in en ru; do
     done
 done
 ! grep -Eq '/(tests|tools|tmp|dist|\.git)/' "$stage/payload.list"
-echo 'PASS: tmp cleanup, gzip control/data, version, help, syntax, root Markdown bytes/path/0644, source config/scripts/0755, six manuals, development directories excluded'
+echo 'PASS: tmp cleanup, gzip control/data, version, help, syntax, allowed Markdown bytes/path/0644, source config/scripts/0755, six manuals, development documents excluded'

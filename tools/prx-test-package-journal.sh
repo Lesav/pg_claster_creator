@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Purpose: verify all root Markdown is packaged and archived journals are excluded.
+# Purpose: verify the Markdown allowlist and latest passed journal in every DEB mode.
 #   Also verify both MIT license copies and reject builds without LICENSE.
 # Usage: bash tools/prx-test-package-journal.sh REPO VERSION LEGACY_JOURNAL LOG_DIR
 # Args: REPO -- source root; VERSION -- expected version; LEGACY_JOURNAL -- ignored;
@@ -26,6 +26,13 @@ mkdir "$stage/tests" "$stage/not-a-file.md"
 printf 'archived journal must not enter DEB\n' >"$stage/tests/TEST-old-journal-passed.md"
 printf 'nested document must not enter DEB\n' >"$stage/not-a-file.md/nested.md"
 ln -s tests/TEST-old-journal-passed.md "$stage/archive-link.md"
+printf 'excluded CI document\n' >"$stage/CI.md"
+printf 'excluded test plan\n' >"$stage/TEST.md"
+printf 'older passed journal\n' >"$stage/TEST-9000.9.0-journal-passed.md"
+printf 'latest passed journal\n' >"$stage/TEST-9000.10.0-journal-passed.md"
+printf 'excluded unfinished journal\n' >"$stage/TEST-9999.0.0-journal.md"
+printf 'excluded failed journal\n' >"$stage/TEST-9999.0.0-journal-fail.md"
+ln -s TEST-9000.10.0-journal-passed.md "$stage/TEST-9999.0.0-journal-passed.md"
 
 verify_package() {
     local package="$1" document member expected=0 actual
@@ -39,19 +46,19 @@ verify_package() {
         tar -tvf "$work/payload.tar" "$member" >"$work/entry"
         grep -q '^-rw-r--r-- root/root ' "$work/entry"
     done
-    while IFS= read -r -d '' document; do
+    for document in "$stage/README.md" "$stage/README_ru.md" "$stage/CHANGELOG.md" "$stage/CHANGELOG_ru.md" "$stage/TEST-9000.10.0-journal-passed.md"; do
         member="./usr/local/share/pg_claster_creator/${document##*/}"
         tar -xOf "$work/payload.tar" "$member" >"$work/extracted"
         cmp "$document" "$work/extracted"
         tar -tvf "$work/payload.tar" "$member" >"$work/entry"
         grep -q '^-rw-r--r-- root/root ' "$work/entry"
         expected=$((expected + 1))
-    done < <(find "$stage" -maxdepth 1 -type f -name '*.md' -print0)
+    done
     actual="$(grep -Ec '^\./usr/local/share/pg_claster_creator/[^/]+\.md$' "$work/manifest")"
     [[ "$actual" == "$expected" ]]
     ! grep -Eq '/tests/|archive-link\.md|not-a-file\.md|TEST-old-journal' "$work/manifest"
     [[ "$(grep -Ec '/man1/create-claster.*\.1\.gz$' "$work/manifest")" == 6 ]]
-    printf 'PASS %s: %s root Markdown files, identical bytes, root/root 0644, gzip; archives/links/nested files excluded\n' "${package##*/}" "$expected"
+    printf 'PASS %s: %s allowed Markdown files, identical bytes, root/root 0644, gzip; CI/test plans/older journals/links excluded\n' "${package##*/}" "$expected"
 }
 
 bash -n "$stage/create-claster-deb.sh"
@@ -76,6 +83,19 @@ for mode in 2 3 4 5; do
     verify_package "$logs/artifacts/markdown-mode-$mode.deb"
     [[ ! -e "$stage/tmp" ]]
 done
+
+# Optional documents may be absent; an allowlisted symlink must not be copied.
+(
+    mkdir "$work/no-journal"
+    cp "$stage/builder-fixture.sh" "$work/no-journal/builder-fixture.sh"
+    cp "$stage/README.md" "$work/no-journal/README.md"
+    ln -s "$stage/README_ru.md" "$work/no-journal/README_ru.md"
+    source "$work/no-journal/builder-fixture.sh"
+    package_markdown_files >"$work/selected"
+    printf '%s\0' "$work/no-journal/README.md" >"$work/expected"
+    cmp "$work/selected" "$work/expected"
+)
+printf 'PASS absent optional documents and allowlisted symlink exclusion\n'
 
 # A missing source license must prevent packaging, including in scripts-only mode.
 mv "$stage/LICENSE" "$work/LICENSE.saved"

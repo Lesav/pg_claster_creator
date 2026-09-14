@@ -30,9 +30,10 @@
 #   a stopped cluster and removes exact paths without pg_dropcluster/syslog reload.
 #   Every package installs this builder below /usr/local/share/pg_claster_creator
 #   but intentionally does not create a command symlink for it in /usr/local/bin.
-#   All modes install every regular .md file directly beside the builder into
-#   the same share directory with mode 0644. Subdirectories (including tests)
-#   and symlinks are not traversed. No particular passed journal is required.
+#   All modes install only README.md, README_ru.md, CHANGELOG.md, CHANGELOG_ru.md
+#   and the latest available TEST-X.Y.Z-journal-passed.md (numeric version order)
+#   beside the scripts, with mode 0644. CI.md, TEST.md, other Markdown, directories
+#   and symlinks are excluded. Missing optional documents are not required.
 #   Included journal statuses are evidence, not a claim that all tests passed.
 #   All modes require the adjacent LICENSE and install its unchanged MIT text
 #   both beside the scripts and as /usr/share/doc/claster-creator/copyright.
@@ -126,7 +127,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.5.5"
+readonly SCRIPT_VERSION="2.5.6"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
 readonly INSTALLED_CONFIG_FILE="/usr/local/shared/pg_claster_creator/.new-claster.config"
@@ -240,11 +241,12 @@ usage() {
   -n, --non-interactive       Отключить диалог и требовать параметры в ключах
   -f, --force                 Разрешить замену уже существующего файла пакета
 
-Во всех режимах все обычные файлы .md непосредственно рядом со сборщиком
-устанавливаются в ${INSTALL_DIR}/ с правами 0644.
-Подкаталоги (включая tests) и символьные ссылки не обходятся.
-Наличие конкретного passed-журнала не требуется; статус включённых журналов
-не меняется и не означает успешного прохождения всех тестов.
+Во всех режимах из Markdown включаются только README.md, README_ru.md,
+CHANGELOG.md, CHANGELOG_ru.md и последний TEST-X.Y.Z-journal-passed.md
+по номеру версии, если эти обычные файлы находятся рядом со сборщиком.
+Они устанавливаются в ${INSTALL_DIR}/ с правами 0644.
+CI.md, TEST.md, прочие Markdown, подкаталоги и символьные ссылки исключены.
+Статус журнала не меняется и не означает полного покрытия всех тестов.
 
 Значения по умолчанию для PostgreSQL и кластера читаются из
 ${CONFIG_FILE}.
@@ -1797,12 +1799,26 @@ install_manual_pages() {
     done
 }
 
+package_markdown_files() {
+    local name latest
+    for name in README.md README_ru.md CHANGELOG.md CHANGELOG_ru.md; do
+        if [[ -f "${SCRIPT_DIR}/${name}" && ! -L "${SCRIPT_DIR}/${name}" ]]; then
+            printf '%s\0' "${SCRIPT_DIR}/${name}"
+        fi
+    done
+    # Restrict names before version sorting; never follow links or recurse into tests.
+    latest="$(find "${SCRIPT_DIR}" -maxdepth 1 -type f -name 'TEST-*-journal-passed.md' -printf '%f\n' |
+        LC_ALL=C grep -E '^TEST-[0-9]+\.[0-9]+\.[0-9]+-journal-passed\.md$' |
+        LC_ALL=C sort -V | tail -n 1 || true)"
+    if [[ -n "$latest" ]]; then printf '%s\0' "${SCRIPT_DIR}/${latest}"; fi
+    return 0
+}
+
 install_markdown_files() {
     local payload_dir="$1" document
-    # NUL-separated, non-recursive discovery also handles hidden names and spaces.
     while IFS= read -r -d '' document; do
         install -m 0644 -- "${document}" "${payload_dir}/${document##*/}"
-    done < <(find "${SCRIPT_DIR}" -maxdepth 1 -type f -name '*.md' -print0)
+    done < <(package_markdown_files)
 }
 
 build_package() {

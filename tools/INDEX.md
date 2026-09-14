@@ -25,7 +25,7 @@ prx-test-live-ports.sh — test deployment port conflicts and stale markers
 prx-test-release-fixtures.sh — run isolated release regression helpers with separate evidence
 prx-test-backup-guards.sh — test backup errors, external flock and all cron schedule choices
 prx-audit-live-regression.sh — archive owned test markers and verify final WSL baseline
-prx-test-package-journal.sh — verify root Markdown inclusion and archived journal exclusion in DEB modes 1–5
+prx-test-package-journal.sh — verify the Markdown allowlist and latest passed journal in DEB modes 1–5
 prx-test-cluster-delete-live.sh — test live deletion with optional prefix/reverse rename regression
 prx-test-live-ui.sh — test real rename, ENV, generated cron commands and database deletion
 prx-test-full-contracts.sh — test argument, dependency and size contracts without changing services

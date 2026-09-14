@@ -136,7 +136,7 @@ umask 077
 read -r -s -p 'Project registration token: ' pgcc_registration_token
 printf '\n'
 timeout 60 java -jar /opt/gitflic-runner/runner.jar register \
-  --url http://gf.icd.nikiet.ru \
+  --url http://gf.icd.nikiet.ru/-/runner/registration \
   --token "$pgcc_registration_token" \
   --name pgcc-ci-test-a186-ci-cd --tags pgcc-deb \
   --default-config ./runner-default.properties >registration.log 2>&1

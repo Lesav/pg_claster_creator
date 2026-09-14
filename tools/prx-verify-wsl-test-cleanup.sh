@@ -4,6 +4,8 @@
 # Args: DISTRO is the exact WSL name; PORT identifies owned QA paths; optional log group defaults to rename-delete.
 #   LABEL optionally records a separate repeat without overwriting earlier evidence.
 # Environment: PGCC_TEST_RELEASE and PGCC_TEST_RUN identify the completed run.
+#   PGCC_TEST_REPO optionally verifies installed scripts against that source tree.
+#   Saved removal candidates and baseline-host.log enable package/core comparisons.
 # Example: PGCC_TEST_RELEASE=2.5.2 PGCC_TEST_RUN=run-20260913-142600 bash tools/prx-verify-wsl-test-cleanup.sh mint22-3 60800
 # Path note: adjust /mnt/d/Ai/pg_claster_creator.backup if it does not match the actual workspace.
 # Output: final-verification.log; preserves historical evidence and unknown paths.
@@ -44,5 +46,25 @@ for root in /var/tmp /DATA /.postgres/systemd /run/lock; do
     [[ ! -d "$root" ]] || [[ -z "$(find "$root" -maxdepth 2 -name "*$port*" -print)" ]]
 done
 [[ -z "$(find "$base" -type f \( -name '*.deb' -o -name '*.tar.gz' -o -name '*.sql' -o -name '*.backup' \) -print)" ]]
+if [[ -f "$base/packages/removal-candidates.txt" ]]; then
+    while IFS= read -r package; do
+        [[ "$package" =~ ^[a-z0-9][a-z0-9.+:-]*$ ]]
+        dpkg-query -s "$package" | sed -n '/^Package:/p; /^Status:/p; /^Version:/p'
+        [[ "$(dpkg-query -W -f='${Status}' "$package")" == 'install ok installed' ]]
+    done <"$base/packages/removal-candidates.txt"
+fi
+if [[ -n "${PGCC_TEST_REPO:-}" ]]; then
+    [[ "$(dpkg-query -W -f='${Version}' claster-creator)" == "$PGCC_TEST_RELEASE" ]]
+    for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
+        cmp -- "$PGCC_TEST_REPO/$name" "/usr/local/share/pg_claster_creator/$name"
+        sha256sum "$PGCC_TEST_REPO/$name"
+    done
+fi
+if [[ -f "$base/baseline-host.log" ]]; then
+    # The pre-run host inventory uses the same basename/size/mtime representation.
+    find / -maxdepth 1 -type f -name 'core.*' -printf '%f %s %T@\n' | sort >"$base/final-core-files.log"
+    grep -E '^core\.[^ ]+ [0-9]+ [0-9.]+$' "$base/baseline-host.log" | sort >"$base/initial-core-files.log" || true
+    cmp "$base/initial-core-files.log" "$base/final-core-files.log"
+fi
 printf 'PASS empty registry, no postgres processes, clean dpkg, current artifacts absent\n'
 date --iso-8601=seconds

@@ -4,9 +4,12 @@ All significant project changes are recorded in this file.
 
 [Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
 
-## Unreleased
+## 2.5.6 — 2026-09-14
 
+- Updated create-claster-deb.sh: the package includes the latest passed test journal and the CHANGELOG and README documents.
 - Added GitHub Actions for non-destructive DEB verification and tag-triggered release uploads with the automatic job token. Pinned actions, read-only PR builds, SHA-256 download verification, and refusal to overwrite conflicting assets. Existing releases/tags and PostgreSQL behavior are unchanged.
+- Updated script version constants, README package examples and all six manual headers. Functional command-line options and environment interfaces are unchanged; builder help documents the new packaging rule.
+- The preceding CI setup commit (`08c77ab`) passed a GitHub-hosted build and artifact checksum verification. After separate authorization, 2.5.6 was built locally and tested on eight WSL distributions; 31 offline publisher tests also passed. The journal records 35 fully confirmed IDs and 24 IDs with untested variants, no observed product failures, and successful cleanup. Its `passed` suffix was explicitly requested despite the documented skips; live 2.5.6 CI/tag publication remains untested.
 
 ## 2.5.5 — 2026-09-14
 

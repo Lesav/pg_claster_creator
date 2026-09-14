@@ -2,7 +2,7 @@
 
 Manage PostgreSQL clusters on Astra Linux and compatible Debian-based systems using interactive Bash menus or command-line automation. Build Debian packages that install the tools and optionally deploy a cluster, restore a backup, or initialize a database from SQL.
 
-**Version:** 2.5.5 · **Language:** English | [Русский](README_ru.md)
+**Version:** 2.5.6 · **Language:** English | [Русский](README_ru.md)
 
 The spelling `claster` is retained in project, command, and package names for compatibility. Interactive messages and `--help` output are currently in Russian; script headers and manual pages include English documentation.
 
@@ -183,12 +183,12 @@ bash ./create-claster-deb.sh --config ./.new-claster.config \
   --mode 1 --non-interactive
 ```
 
-The output is `dist/claster-creator-2.5.5.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI and GitHub Actions check and build the package, retain it as a job artifact, and publish DEB/checksum attachments for matching `vX.Y.Z` tags. GitHub Actions uses a hosted Ubuntu runner and the automatic job token. See [CI and release builds](CI.md) for requirements, release guards and verification scope.
+The output is `dist/claster-creator-2.5.6.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI and GitHub Actions check and build the package, retain it as a job artifact, and publish DEB/checksum attachments for matching `vX.Y.Z` tags. GitHub Actions uses a hosted Ubuntu runner and the automatic job token. See [CI and release builds](CI.md) for requirements, release guards and verification scope.
 
 Install this scripts-only package on a host with the required repositories configured:
 
 ```bash
-sudo apt install ./dist/claster-creator-2.5.5.deb
+sudo apt install ./dist/claster-creator-2.5.6.deb
 ```
 
 | Mode | Action when the package is installed |
@@ -205,7 +205,7 @@ For automatic Postgres Pro selection in modes 4/5, `--pg-version` is a **minimum
 
 `--output-dir` changes the destination; `--force` permits replacing an existing output DEB. Temporary build trees are cleaned on exit; a `tmp/` parent is removed only if this run created it and it is empty. Both DEB archives use gzip for older Astra `dpkg` compatibility.
 
-Every mode installs all regular root-level `*.md` files, including both READMEs and the current journal, into `/usr/local/share/pg_claster_creator/`. Subdirectories such as `tests/` and symbolic links are excluded. Command links are installed for the main and backup scripts in `/usr/local/bin`; invoke the installed builder by its full path. English and Russian manual pages are installed under `/usr/share/man/`.
+Every mode installs only these available root-level Markdown documents into `/usr/local/share/pg_claster_creator/`: `README.md`, `README_ru.md`, `CHANGELOG.md`, `CHANGELOG_ru.md`, and the latest `TEST-X.Y.Z-journal-passed.md` by numeric version. `CI.md`, `TEST.md`, other Markdown files, subdirectories such as `tests/`, and symbolic links are excluded. Command links are installed for the main and backup scripts in `/usr/local/bin`; invoke the installed builder by its full path. English and Russian manual pages are installed under `/usr/share/man/`.
 
 Deployment modes use progress/completion markers in `/var/lib/claster-creator`. Review the builder manual before retrying failed deployments. In particular, `CLASTER_FORCE_INSTALL=1` at package installation deletes the target cluster **without a backup** before redeployment; `CLASTER_FORCE_DB_INSTALL=1` overwrites only the target database and is supported in mode 4 only. The flags are mutually exclusive and are not build-time options. Failed mode-5 SQL is not replayed automatically because partial changes may already exist.
 
@@ -232,13 +232,13 @@ This path is inactive on ordinary physical or virtual Linux hosts. It does not c
 - [Russian README](README_ru.md) — technical translation of this guide.
 - [CHANGELOG.md](CHANGELOG.md) — release history in English; [Russian original](CHANGELOG_ru.md).
 - [TEST.md](TEST.md) — test preparation, full test plan, cleanup rules, and result criteria (Russian).
-- [TEST-2.5.3-journal.md](TEST-2.5.3-journal.md) — latest recorded test run (Russian).
+- [TEST-2.5.6-journal-passed.md](TEST-2.5.6-journal-passed.md) — latest recorded test run (Russian).
 - English manuals: cluster management, backup wrapper, package builder.
 - [tools/INDEX.md](tools/INDEX.md) — reusable helper catalog; check each helper's header and environment assumptions before use.
 
 After DEB installation, use `man create-claster.sh`, `man create-claster-backup.sh`, or `man create-claster-deb.sh`. Russian pages can be selected with `LANG=ru_RU.UTF-8 man create-claster.sh` when that locale is available.
 
-The recorded 2.5.3 run covers eight WSL distributions: 35 of 59 required test IDs were fully confirmed, and 24 still have untested mandatory variants. No product failures were found in executed checks; **this is not a full passed result**. See the journal for scope, reasons, and durations.
+The recorded 2.5.6 run covers eight WSL distributions: 35 of 59 required test IDs were fully confirmed, and 24 still have untested mandatory variants. No product failures were found in executed checks; cleanup passed. The journal has the explicitly requested `passed` suffix, but **this does not mean full coverage**. See the journal for skipped variants, reasons, and durations (13 min 34 s overall).
 
 Full testing is destructive: the plan can delete clusters and remove/reinstall server packages. Use disposable, explicitly authorized environments; follow **Начало тестирования** in `TEST.md`, not a blanket test command. Historical local journals live in ignored `tests/` and are not shipped. A journal included in a package is evidence of its stated scope, not certification of every feature.
 

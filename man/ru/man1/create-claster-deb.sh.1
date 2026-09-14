@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-14" "pg_claster_creator 2.5.5" "Команды разработчика"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-14" "pg_claster_creator 2.5.6" "Команды разработчика"
 .SH ИМЯ
 create-claster-deb.sh \- сборка Debian-пакетов claster-creator
 .SH СИНТАКСИС
@@ -260,9 +260,10 @@ claster-creator-ВЕРСИЯ-PG-PGVER-КЛАСТЕР-БД.deb
 .SH ФАЙЛЫ
 .TP
 .I /usr/local/share/pg_claster_creator/*.md
-Все обычные .md непосредственно рядом со сборщиком устанавливаются во всех
-режимах с правами 0644, включая скрытые имена и пробелы. Подкаталоги (tests)
-и символьные ссылки не обходятся. Конкретный passed-журнал не обязателен.
+Во всех режимах с правами 0644 включаются только README.md, README_ru.md,
+CHANGELOG.md, CHANGELOG_ru.md и последний доступный TEST-X.Y.Z-journal-passed.md
+по номеру версии. Отсутствующие документы необязательны. CI.md, TEST.md,
+остальные Markdown, подкаталоги и символьные ссылки исключены.
 Статусы журналов сохраняются; включение файла не означает успешного теста.
 .TP
 .I /usr/local/share/pg_claster_creator/create-claster-deb.sh

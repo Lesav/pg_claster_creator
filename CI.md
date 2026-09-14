@@ -2,6 +2,16 @@
 
 ## GitHub Actions
 
+For release **2.5.6**, the local build, eight-WSL regression
+and 31 offline publisher tests have run after separate approval; see
+[the journal](TEST-2.5.6-journal-passed.md) for the documented coverage gaps.
+The successful GitHub branch run for commit `08c77ab` verified the preceding
+CI setup. Publish reviewed release commits by fast-forwarding the default branch
+and `release/2.x`, then creating a new annotated version tag. Keep `release/1.x`
+on its latest 1.x release and preserve every existing tag. Branch pushes also
+start CI; version tags enable release publication. Publication of 2.5.6 on GitHub
+and the internal GitFlic is verified separately from the historical WSL journal.
+
 `.github/workflows/deb-release.yml` runs on GitHub-hosted Ubuntu 24.04:
 
 - Pushes to `master` / `release/**` and pull requests run offline publisher tests,
@@ -59,7 +69,8 @@ The runner also needs its vendor-matched Java runtime, `helper.jar` and
 1. `build-deb` checks every tracked Bash file with `bash -n` and builds mode 1
    using the existing `prx-build-release-local.sh`. It verifies version/help,
    gzip control/data archives, the tracked distribution config, script contents
-   and 0755 permissions, all regular root Markdown files with 0644 permissions,
+   and 0755 permissions, allowlisted Markdown (README/CHANGELOG in both languages
+   and the latest available passed journal) with 0644 permissions; no CI.md/TEST.md,
    both license copies, and six English/Russian manual pages. Development
    directories must not enter the package. No DEB is installed and no cluster
    operation is executed.
