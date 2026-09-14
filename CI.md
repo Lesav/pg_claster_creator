@@ -67,36 +67,27 @@ available; `PGCC_CFG` from the host is intentionally not inherited by the build.
 
 ## Release procedure
 
-### Current self-hosted verification status (2026-09-13)
+### Current self-hosted verification status (2026-09-14)
 
-The dedicated `a186-ci-cd` runner builds and uploads job artifacts successfully.
-End-to-end automatic releases on `gf.icd.nikiet.ru` **are not yet operational**:
+CI publication is verified in the temporary project: pipeline **18**, build job
+**23**, publication job **27**. The fixed publisher used GITFLIC_RELEASE_TOKEN,
+uploaded the DEB built from the original v2.5.4 commit and SHA256SUMS, downloaded
+both, and verified their hashes. The user independently downloaded and checked
+the files. The temporary recovery branch is not part of the main pipeline.
 
-- A tag push does not automatically create a tag pipeline on the tested 4.5.0
-  installation. Starting from the tag's UI works; REST pipeline start using
-  `CI_JOB_TOKEN` returns 403. A user API token successfully started tag pipeline
-  #15 for `v2.5.4`; this does not fix automatic triggering on tag push.
-- Release creation using `CI_JOB_TOKEN` returns 500 with
-  `org.springframework.dao.InvalidDataAccessApiUsageException.type`: the runner
-  principal has a null database user ID, passed to `userService.getById()`.
-  A user API token created the diagnostic prerelease successfully (HTTP 200,
-  non-null `authorId`), release ID `a9b8febe-f94e-4daf-b99d-1b5a2da7af75`.
-- Release upload rejects the original DEB with 415 and explicitly identifies
-  `application/x-debian-package` as unsupported. Installed 4.5.0 uses the compiled
-  `TikaFileExtensionUtils.RELEASE_ARCHIVE_MEDIATYPES` allowlist, not an ordinary
-  configuration property. A server fix is required; disguising the file or
-  changing the client's declared Content-Type is not a fix. User authentication
-  does not bypass this restriction. `text/plain` for SHA256SUMS is also absent
-  from that list; its upload still needs a separate integration check.
-- The original job artifact was downloaded and its DEB checksum verified against
-  its SHA256SUMS, but **release attachment download verification is blocked**:
-  there is no successfully uploaded release DEB yet.
+The production GitFlic server uses a separately patched 4.5.0 image that accepts
+DEB and strictly validated SHA256SUMS uploads. This package does not patch GitFlic.
+Stock 4.5.0 rejects these uploads (415); its job-token release creation fails
+with a null author ID (500). Keep user-token authorization separate from CI_JOB_TOKEN.
 
-See [runner setup and diagnostic evidence](tools/gitflic-ci-cd.md#7-теги-и-публикация-известные-ограничения).
-The offline publisher tests run before CI builds; they do not replace this
-integration check.
+Tag-push auto-triggering is **not confirmed** on this installation. If no tag
+pipeline appears, use **CI/CD → Create pipeline → Select tag** and choose the
+exact release tag. Do not substitute CI_COMMIT_TAG in a branch pipeline.
+A successful manual tag start is not proof of automatic triggering on push.
 
-### Procedure after resolving the server blockers
+See [runner setup and evidence](tools/gitflic-ci-cd.md#7-теги-и-публикация-известные-ограничения).
+
+### Release steps
 
 1. Update the three script versions, six man-page headers, README examples and
    changelogs. Preserve old journal filenames and their actual test scope.
