@@ -2,11 +2,10 @@
 
 ## GitHub Actions
 
-For release **2.5.7**, run the scripts-only build, publisher tests, CLI/ENV
-contracts and the isolated mode 5/6/create-replace regressions described in
-[TEST.md](TEST.md). The latest eight-WSL journal remains the historical 2.5.6
-run and does not cover the new 2.5.7 behavior; see
-[the journal](TEST-2.5.6-journal-passed.md) for its documented coverage gaps.
+For release **2.5.7**, the scripts-only build, publisher tests, CLI/ENV
+contracts, isolated mode 5/6/create-replace regressions and the eight-WSL run
+described in [TEST.md](TEST.md) have completed without product failures; see
+[the journal](TEST-2.5.7-journal-passed.md) for its documented coverage gaps.
 The successful GitHub branch run for commit `08c77ab` verified the preceding
 CI setup. Publish reviewed release commits by fast-forwarding the default branch
 and `release/2.x`, then creating a new annotated version tag. Keep `release/1.x`

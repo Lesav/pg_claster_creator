@@ -8,7 +8,9 @@ All significant project changes are recorded in this file.
 
 - Added DEB mode 6: SQL on an existing cluster/database; missing targets warn and succeed without creating anything. Modes 4/5 offer explicit create/replace policy (CLI/ENV), with `re-<cluster>-<database>` package names for replacement. Added main-script SQL CLI/ENV, updated manuals and test plan; failed SQL is not automatically replayed.
 
-- Release attachments now use `claster-creator-X.Y.Z.sha256` on GitHub and GitFlic. The CI build retains `SHA256SUMS` only as an artifact compatibility copy. GitFlic sends checksum files as `text/plain`; GitFlic 4.5.0 additionally needs the separate server-side checksum-name validation patch. Existing release assets and tags are unchanged.
+- Release attachments now use `claster-creator-X.Y.Z.sha256` on GitHub and GitFlic. The CI build retains `SHA256SUMS` only as an artifact compatibility copy. GitFlic sends checksum files as `text/plain`; GitFlic 4.5.0 additionally needs the separate server-side checksum-name validation patch.
+
+- The full eight-WSL run produced 4472 PASS results and 120 successful expected-return-code checks with no product failures; cleanup and exact server-minor restoration succeeded on every stand. The passed journal retains 26 explicitly untested variants and does not claim full coverage.
 
 ## 2.5.6 — 2026-09-14
 

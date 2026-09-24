@@ -238,13 +238,13 @@ This path is inactive on ordinary physical or virtual Linux hosts. It does not c
 - [Russian README](README_ru.md) — technical translation of this guide.
 - [CHANGELOG.md](CHANGELOG.md) — release history in English; [Russian original](CHANGELOG_ru.md).
 - [TEST.md](TEST.md) — test preparation, full test plan, cleanup rules, and result criteria (Russian).
-- [TEST-2.5.6-journal-passed.md](TEST-2.5.6-journal-passed.md) — latest recorded test run (Russian).
+- [TEST-2.5.7-journal-passed.md](TEST-2.5.7-journal-passed.md) — latest recorded test run (Russian).
 - English manuals: cluster management, backup wrapper, package builder.
 - [tools/INDEX.md](tools/INDEX.md) — reusable helper catalog; check each helper's header and environment assumptions before use.
 
 After DEB installation, use `man create-claster.sh`, `man create-claster-backup.sh`, or `man create-claster-deb.sh`. Russian pages can be selected with `LANG=ru_RU.UTF-8 man create-claster.sh` when that locale is available.
 
-The recorded 2.5.6 run covers eight WSL distributions: 35 of 59 required test IDs were fully confirmed, and 24 still have untested mandatory variants. No product failures were found in executed checks; cleanup passed. The journal has the explicitly requested `passed` suffix, but **this does not mean full coverage**. See the journal for skipped variants, reasons, and durations (13 min 34 s overall).
+The recorded 2.5.7 run covers eight WSL distributions: 35 of 61 required test IDs were fully confirmed, and 26 still have untested mandatory variants. No product failures were found in executed checks; cleanup passed. The journal has the explicitly requested `passed` suffix, but **this does not mean full coverage**. See the journal for skipped variants, reasons, and durations (10 min 23 s overall).
 
 Full testing is destructive: the plan can delete clusters and remove/reinstall server packages. Use disposable, explicitly authorized environments; follow **Начало тестирования** in `TEST.md`, not a blanket test command. Historical local journals live in ignored `tests/` and are not shipped. A journal included in a package is evidence of its stated scope, not certification of every feature.
 
