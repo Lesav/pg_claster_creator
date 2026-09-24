@@ -4,6 +4,61 @@ All significant project changes are recorded in this file.
 
 [Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
 
+## 2.6.0 — 2026-09-24
+
+- Minor version bump for SQL directory trees, cold create/replace policy and the
+  local/WSL test launcher. Updated version constants, manuals and package examples.
+- Version 2.6.0 completed an eight-way destructive WSL run: all exit codes 0,
+  3808 PASS rows and 120 expected-return-code checks; SQL order and cleanup passed.
+  The journal records 27/61 fully covered IDs and 34 partial IDs, with explicit
+  skips; total elapsed time was 6 min 19 s. The passed suffix was authorized
+  despite those skips and does not claim full coverage.
+- The preceding working-tree run still identified itself as 2.5.7: eight WSL,
+  3808 PASS rows and 120 expected-return-code checks; cleanup passed, 27/61 IDs
+  fully covered and 34 partial (6 min 33 s). Its journal is retained unchanged;
+  it is not a full 2.6.0 release test or evidence of publication.
+
+- Make test fixtures explicitly UTF-8 on Python 3.5/C locales and preserve
+  multiple SQL check results with separate psql -c arguments on PostgreSQL 13.
+- Match APT removal names to installed package architecture identities in both
+  launcher and bootstrap; reject ambiguous multiarch aliases and unknown packages.
+- Added tools/sql-tests with six nested SQL scripts and a final root 00.sql
+  count/order oracle; both test modes run it on a private temporary server.
+- Randomly reserve non-overlapping test port ranges across parallel WSL runs
+  sharing an evidence root; keep explicit --port and retain interrupted reservations.
+- Native Linux test results/artifacts default to /tmp/pg_claster_creator;
+  always print the created log directory at exit, including initialization failures.
+- Align test start/finish output with timestamps, PASS/FAIL and millisecond durations.
+- Show an elapsed-time counter for test stages lasting longer than five seconds.
+- Compress completed test .log files larger than 100 KiB into .log.gz after audits.
+- Tests prefer the installed server (including both Tantor Free package names).
+  Original clusters suppress server/common reinstallation and dependency-removal
+  tests. With no server installed, provision by the product's priority order.
+- Store the test baseline APT listing as apt-list.log.gz.
+- Isolated automated stand execution from the interactive terminal to prevent
+  APT/timeout job-control stops; fail closed when the cluster registry cannot be read.
+- Keep evidence private while running helpers with umask 022 so PostgreSQL can
+  traverse newly created data-directory parents.
+- Fixed the stand.log collision by separating launcher logs into launcher/;
+  print stage exit codes/error paths and use the C locale for launcher diagnostics.
+- make-test.sh writes its journal in the individual run's log directory;
+  existing project-root journals no longer block testing and remain unchanged.
+- Moved Windows WSL dispatch to tools/make-test.cmd --wsl DISTRO, deriving the
+  /mnt drive path from the wrapper location. make-test.sh now runs locally only.
+- Added tools/make-test.sh for one local/WSL target, two default-No confirmations,
+  existing helper orchestration and journals. Declining destructive testing uses
+  fixtures and a private test_<1–9> SQL server; destructive prerequisites are skipped.
+  Helper host/output paths now support local Linux; package baselines are locale-independent.
+- Expanded the full test plan with explicit singl (one SQL file) and struct-dirs
+  (SQL directory tree) variants, interface coverage, execution order, results,
+  failure handling and DEB replay checks. These are test labels, not CLI modes.
+- Interactive SQL execution accepts directory trees. Regular *.sql files run in
+  bytewise relative-path order after preview and confirmation, one psql session
+  per file. Stop on the first failure; skip nested symlinks. The main CLI/ENV
+  remains single-file; DEB modes 5/6 also accept SQL trees via menu, CLI and ENV.
+- Cold mode 3 supports create/replace, with an installation-time backup choice
+  before replacement. Modes 3/4/5 use cre/rst-cld/dmp/sql package names.
+
 ## 2.5.7 — 2026-09-24
 
 - Added DEB mode 6: SQL on an existing cluster/database; missing targets warn and succeed without creating anything. Modes 4/5 offer explicit create/replace policy (CLI/ENV), with `re-<cluster>-<database>` package names for replacement. Added main-script SQL CLI/ENV, updated manuals and test plan; failed SQL is not automatically replayed.

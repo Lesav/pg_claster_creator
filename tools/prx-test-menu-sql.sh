@@ -89,3 +89,53 @@ for invalid in broken.sql directory.sql missing.sql anything.tar.gz 999999999999
     if select_sql_file <<<"$invalid"; then echo "FAIL invalid $invalid"; exit 1; fi
 done
 printf 'PASS SQL menu: selections, paths, back/EOF, confirmation, errors and target guards\n'
+
+# Directory plans use relative-path byte order, preserve spaces/newlines, and
+# never follow symlinks. Each file is submitted separately to the same target.
+tree="$fixture/sql tree"
+mkdir -p "$tree/02 nested" "$tree/empty"
+printf 'first\n' >"$tree/01.sql"
+printf 'second\n' >"$tree/02 nested/01.sql"
+printf 'third\n' >"$tree/02 nested/02 line"$'\n'"break.sql"
+printf 'last\n' >"$tree/10.sql"
+printf 'ignored\n' >"$tree/readme.txt"
+ln -s ../backups "$tree/linked-directory"
+ln -s 01.sql "$tree/linked.sql"
+select_sql_file <<<"$tree"
+[[ ${#SELECTED_SQL_FILES[@]} == 4 ]]
+[[ "${SELECTED_SQL_FILES[0]}" == "$tree/01.sql" && "${SELECTED_SQL_FILES[1]}" == "$tree/02 nested/01.sql" && "${SELECTED_SQL_FILES[3]}" == "$tree/10.sql" ]]
+runuser() {
+    local contents
+    contents="$(cat)"
+    printf '%s\n' "$contents" >>"$fixture/events"
+    [[ "${CHANGE_TARGET:-0}" == 0 ]] || MOCK_PORT=59437
+    [[ "$contents" != "${FAIL_CONTENT:-never}" ]] || return 3
+}
+check_menu directory "$(printf '1\n1\n%s\ny' "$tree")" 4
+printf 'first\nsecond\nthird\nlast\n' >"$fixture/expected"
+cmp "$fixture/expected" "$fixture/events"
+check_menu directory-cancel "$(printf '1\n1\n%s\nN' "$tree")" 0
+FAIL_CONTENT=second
+check_menu directory-error "$(printf '1\n1\n%s\ny' "$tree")" 2
+grep -q 'код 3' "$logs/directory-error.log"
+unset FAIL_CONTENT
+CHANGE_TARGET=1
+check_menu directory-target-changed "$(printf '1\n1\n%s\ny' "$tree")" 1
+unset CHANGE_TARGET MOCK_PORT
+select_sql_file <<<"sql tree"
+[[ ${#SELECTED_SQL_FILES[@]} == 4 ]]
+mkdir "$backup_dir/nested"
+printf 'backup-relative\n' >"$backup_dir/nested/01.sql"
+select_sql_file <<<"nested"
+[[ "${SELECTED_SQL_FILES[0]}" == "$backup_dir/nested/01.sql" ]]
+! collect_sql_files "$tree/empty"
+select_sql_file <<<"$tree"
+printf 'not-confirmed\n' >"$tree/99.sql"
+: >"$fixture/events"
+execute_sql_files_checked 18 qa 59436 /fixture/data qa "${SELECTED_SQL_FILES[@]}"
+cmp "$fixture/expected" "$fixture/events"
+rm -- "$tree/01.sql"
+: >"$fixture/events"
+! execute_sql_files_checked 18 qa 59436 /fixture/data qa "${SELECTED_SQL_FILES[@]}"
+[[ ! -s "$fixture/events" ]]
+printf 'PASS SQL directories: recursion, byte order, paths, symlink exclusion, cancellation, stop on error, target changes, frozen plan and disappeared file\n'

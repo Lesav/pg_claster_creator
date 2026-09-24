@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Environment: PGCC_TEST_HOST overrides the WSL evidence label for local Linux;
+# PGCC_TEST_OUTPUT overrides the per-release evidence root (also on local Linux).
+# PGCC_TEST_KEEP_SERVER=1 skips dependency tests that remove server/common packages.
 # Purpose: actual APT and dpkg+APT dependency installation, reusing approved removal wrapper.
 # Usage: PGCC_TEST_RELEASE=VERSION PGCC_TEST_RUN=RUN bash tools/prx-test-wsl-dependencies.sh DISTRO PACKAGE MAJOR FAMILY PORT
 # Args: exact WSL name, original server package, major, family and completed core run port.
@@ -8,13 +11,17 @@
 set -Eeuo pipefail
 repo="${PGCC_TEST_REPO:-/mnt/d/Ai/pg_claster_creator}"
 release="${PGCC_TEST_RELEASE:?release required}"; token="${release//./}"
-base=/mnt/d/Ai/pg_claster_creator.backup/TEST-${release}
+base="${PGCC_TEST_OUTPUT:-/mnt/d/Ai/pg_claster_creator.backup/TEST-${release}}"
 distro="$1"; package="$2"; v="$3"; family="$4"; port="$5"
-[[ "$WSL_DISTRO_NAME" == "$distro" && "$port" =~ ^[0-9]+$ ]] || exit 2
+[[ "${PGCC_TEST_HOST:-${WSL_DISTRO_NAME:-}}" == "$distro" && "$port" =~ ^[0-9]+$ ]] || exit 2
 [[ -z "${PGCC_TEST_RUN:-}" ]] || base="$base/$distro/$PGCC_TEST_RUN"
 mkdir -p "$base/$distro"
 logs="$base/$distro/dependencies"; [[ ! -e "$logs" ]]; mkdir "$logs"
 exec >"$logs/run.log" 2>&1
+if [[ "${PGCC_TEST_KEEP_SERVER:-0}" == 1 ]]; then
+    printf 'SKIP dependency installation tests: selected server packages must be retained\n'
+    exit 0
+fi
 core="/var/tmp/pgcc${token}-$port"; target="qa${token}_${port}m4"
 deb="$(find "$core/debs" -maxdepth 1 -name "*-$target-*.deb" -print -quit)"
 [[ -f "$deb" ]]; dpkg-deb -f "$deb" Depends >"$logs/depends.log"

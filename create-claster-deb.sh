@@ -38,8 +38,11 @@
 #   All modes require the adjacent LICENSE and install its unchanged MIT text
 #   both beside the scripts and as /usr/share/doc/claster-creator/copyright.
 #
-# Modes 4/5 support --cluster-policy create|replace / PGCC_CLUSTER_POLICY.
-# Replacement stops/deletes the exact version/name without backup. Default: create.
+# Modes 3/4/5 support --cluster-policy create|replace / PGCC_CLUSTER_POLICY.
+# Cold replacement asks about a cold/hot backup at install time before deletion;
+# EOF/cancellation or backup failure prevents deletion of the existing cluster.
+# Replacement stops/deletes the exact version/name (modes 4/5: no backup).
+# Default create skips an existing cluster with a warning and exit code 0.
 # Mode 6 never creates targets, adds no server dependency, rejects force flags.
 # Missing targets warn and succeed; failed SQL is not automatically replayed.
 #
@@ -48,7 +51,7 @@
 #   2  Install the files and create an empty PostgreSQL cluster.
 #   3  Install the files and restore a cluster from an embedded cold backup.
 #   4  Install the files, create a cluster, and restore an embedded hot DB dump.
-#   5  Install the files, create a cluster/database, and execute an embedded SQL file.
+#   5  Install the files, create a cluster/database, and execute embedded SQL files.
 #   6  Install the files and execute SQL on an existing cluster/database.
 #
 # Command-line options:
@@ -56,7 +59,7 @@
 #   -h, --help                 Print detailed usage information.
 #   -v, --version              Print the builder version.
 #   -m, --mode MODE            Select package mode 1, 2, 3, 4, 5, or 6.
-#       --cluster-policy POLICY create (default) or replace; modes 4/5 only.
+#       --cluster-policy POLICY create (default) or replace; modes 3/4/5 only.
 #       --pg-family FAMILY     postgresql, postgrespro-ent, tantor-free, tantor-se, tantor-be.
 #       --pg-version VERSION   Set the PostgreSQL major version.
 #       --cluster-name NAME    Set the target cluster name.
@@ -67,10 +70,11 @@
 #       --password PASSWORD    Set the password stored in the deployment plan.
 #       --data-root DIRECTORY  Set a custom data root, for example /DATA.
 #       --backup-file FILE     Select a cold (mode 3) or hot (mode 4) backup.
-#       --sql-file FILE        Embed a readable .sql file for modes 5/6;
-#                              accepts --sql-file=FILE, relative/absolute paths.
+#       --sql-file PATH        Embed a .sql file or directory tree for modes 5/6;
+#                              accepts --sql-file=PATH, relative/absolute paths.
 #       --backup-dir DIRECTORY Select the backup/SQL file search directory.
-#       --database NAME        Set the target database name for modes 4, 5 and 6.
+#       --database NAME        Target DB for modes 4/5/6; filename label in mode 3
+#                              (defaults to cluster name; restores all databases).
 #       --depends PACKAGES     Add comma-separated package dependencies; automatic
 #                              Postgres Pro drops covered server dependencies.
 #       --output-dir DIRECTORY Set the destination directory for the DEB file.
@@ -87,8 +91,13 @@
 #   shows the aligned archive size obtained via stat without opening the
 #   archive, reads backup-info.env without executing it, and lets the operator
 #   confirm or change supported target values before the package is created.
-#   Modes 5/6 list .sql files in the backup directory and accepts relative/absolute
-#   paths, including when the list is empty. SQL is trusted administrator input:
+#   Modes 5/6 list .sql files in the backup directory and accept relative/absolute
+#   paths to a file or directory tree, including when the list is empty.
+#   Regular *.sql files are ordered by LC_ALL=C relative paths; nested symlinks
+#   are skipped. A frozen manifest preserves the confirmed order in the package.
+#   Each file runs in its own psql session; stop at the first failure, no rollback.
+#   Percent/CR/LF characters in packaged paths are escaped as %25/%0D/%0A.
+#   SQL is trusted administrator input:
 #   psql runs as postgres with ON_ERROR_STOP; a failed/interrupted execution is
 #   not replayed automatically. CLASTER_FORCE_INSTALL resets the whole cluster.
 #   In modes 4 and 5, an implicit postgrespro-ent package treats --pg-version as the
@@ -108,6 +117,8 @@
 #   --schema=PGCC_SCHEMA, --user=PGCC_DB_USER, --password=PGCC_DB_PASSWORD,
 #   --data-root=PGCC_DATA_ROOT, --backup-file=PGCC_BACKUP_FILE,
 #   --sql-file=PGCC_SQL_FILE, --backup-dir=PGCC_BACKUP_DIR, --database=PGCC_DATABASE,
+#   PGCC_SQL_FILE accepts a file or directory in this builder; the main CLI
+#   remains single-file. PGCC_DATABASE is only a filename label in cold mode 3.
 #   --depends=PGCC_DEPENDS (comma-separated), --output-dir=PGCC_OUTPUT_DIR.
 #   --interactive/--non-interactive=PGCC_INTERACTIVE (yes/no),
 #   --force=PGCC_FORCE (yes/no). Boolean ENV also accepts true/false, 1/0, y/n.
@@ -124,6 +135,7 @@
 #                               overwrite the target DB from the hot dump.
 #   The two force flags are mutually exclusive. Mode 3 cold restores support
 #   only CLASTER_FORCE_INSTALL.
+#   For mode 3 with replace policy, force does not bypass the backup prompt.
 #
 # Output and dependencies:
 #   Every package depends on postgresql-common. A cold-backup package depends on
@@ -135,7 +147,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.5.7"
+readonly SCRIPT_VERSION="2.6.0"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
 readonly INSTALLED_CONFIG_FILE="/usr/local/shared/pg_claster_creator/.new-claster.config"
@@ -160,6 +172,8 @@ CLUSTER_POLICY=create
 OUTPUT_DIR="${SCRIPT_DIR}/dist"
 BACKUP_FILE=""
 SQL_FILE=""
+SQL_PLAN_SOURCE=""
+declare -a SQL_FILES=()
 BACKUP_DIR=""
 SERVER_PACKAGE=""
 DATA_ROOT=""
@@ -233,8 +247,9 @@ usage() {
   -h, --help                  Показать эту справку и выйти
   -v, --version               Показать версию и выйти
   -m, --mode РЕЖИМ            Явно выбрать режим сборки 1|2|3|4|5|6
-      --cluster-policy ПОЛИТИКА create|replace (PGCC_CLUSTER_POLICY), режимы 4/5;
-                              create по умолчанию; replace удаляет целевой кластер без бэкапа
+      --cluster-policy ПОЛИТИКА create|replace (PGCC_CLUSTER_POLICY), режимы 3/4/5;
+                              create по умолчанию; replace пересоздаёт кластер
+                              режим 3: запрос бэкапа перед удалением; 4/5: без бэкапа
       --pg-family СЕМЕЙСТВО   postgresql|postgrespro-ent|tantor-free|tantor-se|tantor-be
       --pg-version ВЕРСИЯ     Основная версия PostgreSQL; минимум для
                               postgrespro-ent в режимах 4/5 без --package
@@ -246,9 +261,10 @@ usage() {
       --password ПАРОЛЬ       Пароль создаваемых ролей
       --data-root КАТАЛОГ     Пользовательский корень данных, например /DATA
       --backup-file ФАЙЛ      Холодный бэкап для режима 3 или горячий для режима 4
-      --sql-file ФАЙЛ         Доступный для чтения .sql для режимов 5/6
+      --sql-file ПУТЬ         Файл .sql или дерево каталогов для режимов 5/6
       --backup-dir КАТАЛОГ    Каталог выбора бэкапов/SQL; по умолчанию из конфига
-      --database ИМЯ          Целевая БД для режимов 4/5/6
+      --database ИМЯ          Целевая БД для режимов 4/5/6; в режиме 3 — метка
+                              имени DEB (по умолчанию имя кластера), не фильтр БД
       --depends ПАКЕТЫ        Дополнительные зависимости через запятую;
                               ключ можно указывать несколько раз (режимы 2–6);
                               server, покрытый автоальтернативой contrib, исключается
@@ -285,20 +301,26 @@ ENV при сборке (приоритет: CLI > непустая ENV > кон
   --interactive/--non-interactive: PGCC_INTERACTIVE=yes/no; --force: PGCC_FORCE=yes/no.
 Логические ENV также принимают true/false, 1/0, y/n. Пустые ENV не заданы.
 Help/version ENV-аналогов не имеют. Переменная SQL_FILE без префикса не читается.
-SQL задаётся через --sql-file ФАЙЛ или --sql-file=ФАЙЛ в режимах 5/6.
+SQL задаётся через --sql-file ПУТЬ или --sql-file=ПУТЬ в режимах 5/6: файл или каталог.
 CLASTER_FORCE_INSTALL и CLASTER_FORCE_DB_INSTALL действуют при установке
 готового пакета; они не задают параметры его сборки.
 В диалоге выбирается бэкап, рядом с типом показывается выровненный размер
 файла, затем выводятся его метаданные и уточняются параметры целевого кластера,
 БД и размещения данных. Для построения списка архивы не распаковываются.
 Режим 3 показывает только холодные архивы, режим 4 — только горячие дампы.
-В режимах 5/6 выберите номер .sql из каталога бэкапов или введите путь к файлу:
+В режимах 5/6 выберите номер .sql из каталога бэкапов или путь к файлу/каталогу:
 относительно текущего каталога, затем каталога бэкапов, либо абсолютный путь.
-SQL включается в DEB с правами 0600 и выполняется при установке от postgres
-с ON_ERROR_STOP. Используйте только доверенные SQL-файлы; внешние include-файлы
+SQL включается в DEB с правами 0600 и выполняется от postgres с ON_ERROR_STOP.
+Каталог: рекурсивно обычные *.sql, без внутренних ссылок, порядок LC_ALL=C
+относительных путей. Список фиксируется перед подтверждением; каждый файл —
+отдельный сеанс. Первая ошибка останавливает набор без отката предыдущих файлов.
+Символы %, CR и LF в путях внутри DEB кодируются как %25, %0D и %0A.
+Используйте только доверенные SQL-файлы; внешние include-файлы
 не встраиваются. Ошибка может оставить частичные изменения; автоматического
 повтора SQL нет. CLASTER_FORCE_INSTALL=1 пересоздаёт весь кластер без бэкапа.
 CLASTER_FORCE_DB_INSTALL для режима 5 не поддерживается.
+Для холодного режима 3 с replace даже CLASTER_FORCE_INSTALL не обходит запрос
+бэкапа; без ответа/при ошибке бэкапа удаление не начинается.
 
 Для режимов 4/5 с семейством postgrespro-ent и без явного --package значение
 --pg-version является минимальной версией сервера. В Depends записываются
@@ -314,9 +336,10 @@ postgrespro-ent-*-server из --depends исключаются как избыт
 Имена результатов:
   claster-creator-${SCRIPT_VERSION}.deb
   claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-empty.deb
-  claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-full.deb
-  claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-<БД>.deb
-  claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<кластер>-<БД>-sql.deb
+  claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<cre|rst>-cld-<кластер>-<БД>.deb
+  claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<cre|rst>-dmp-<кластер>-<БД>.deb
+  claster-creator-${SCRIPT_VERSION}-<pg>-<версия>-<cre|rst>-sql-<кластер>-<БД>.deb
+  claster-creator-${SCRIPT_VERSION}-<версия>-<кластер>-<БД>-sql-existing.deb
 
 Примеры:
   ./${SCRIPT_NAME}                         # интерактивный выбор режима
@@ -591,7 +614,7 @@ resolve_backup_file() {
     local requested="$1" candidate
     if [[ "${requested}" == /* ]]; then
         candidate="${requested}"
-    elif [[ -f "${requested}" ]]; then
+    elif [[ -f "${requested}" || -d "${requested}" ]]; then
         candidate="${requested}"
     else
         candidate="${BACKUP_DIR%/}/${requested}"
@@ -663,10 +686,41 @@ select_backup_interactive() {
 
 resolve_sql_file() {
     local requested="$1" resolved
-    [[ "${requested}" == *.sql ]] || return 1
     resolved="$(resolve_backup_file "${requested}")" || return 1
-    [[ -f "${resolved}" && -r "${resolved}" && "${resolved}" == *.sql ]] || return 1
+    [[ -d "${resolved}" || ( -f "${resolved}" && -r "${resolved}" && "${resolved}" == *.sql ) ]] || return 1
     printf '%s' "${resolved}"
+}
+
+# Freeze the confirmed list, with NUL delimiters for arbitrary filenames.
+prepare_sql_files() {
+    local manifest file
+    if [[ "${SQL_PLAN_SOURCE}" != "${SQL_FILE}" ]]; then
+        SQL_FILES=()
+        SQL_PLAN_SOURCE=""
+        if [[ -d "${SQL_FILE}" ]]; then
+            manifest="$(mktemp)" || return 1
+            if ! (set -o pipefail; find "${SQL_FILE}" -type f -name '*.sql' -print0 | LC_ALL=C sort -z) >"${manifest}"; then
+                rm -f -- "${manifest}"; return 1
+            fi
+            mapfile -d '' -t SQL_FILES <"${manifest}"
+            rm -f -- "${manifest}"
+        else
+            SQL_FILES=("${SQL_FILE}")
+        fi
+    fi
+    ((${#SQL_FILES[@]})) || return 1
+    for file in "${SQL_FILES[@]}"; do
+        [[ -f "${file}" && -r "${file}" && ! -L "${file}" ]] || return 1
+    done
+    SQL_PLAN_SOURCE="${SQL_FILE}"
+}
+
+print_sql_plan() {
+    local file
+    [[ -d "${SQL_FILE}" ]] || return 0
+    printf 'SQL-каталог: %s\nПорядок выполнения (LC_ALL=C):\n' "${SQL_FILE}"
+    for file in "${SQL_FILES[@]}"; do printf '  %s\n' "${file#"${SQL_FILE%/}/"}"; done
+    printf 'Отдельный сеанс psql для каждого файла; остановка при первой ошибке, общего отката нет.\n'
 }
 
 select_sql_interactive() {
@@ -678,6 +732,7 @@ select_sql_interactive() {
             return 1
         }
         SQL_FILE="${selected}"
+        prepare_sql_files || { warn 'пустой или недоступный SQL-источник'; return 1; }
         return 0
     fi
     if [[ -d "${BACKUP_DIR}" ]]; then
@@ -690,7 +745,7 @@ select_sql_interactive() {
     for i in "${!files[@]}"; do
         printf '%3d - %s\n' "$((i + 1))" "${files[i]##*/}"
     done
-    printf '  0 - Назад\nМожно указать относительный или полный путь к .sql, даже если список пуст.\n'
+    printf '  0 - Назад\nМожно указать относительный или полный путь к .sql или каталогу, даже если список пуст.\n'
     read -r -p 'Выберите номер SQL-файла или введите путь: ' choice || return 2
     [[ -n "${choice}" && "${choice}" != 0 ]] || return 1
     if [[ "${choice}" =~ ^[0-9]+$ ]]; then
@@ -708,6 +763,8 @@ select_sql_interactive() {
         warn 'SQL-файл не найден, недоступен или имеет расширение, отличное от .sql'
         return 1
     }
+    SQL_PLAN_SOURCE=""
+    prepare_sql_files || { SQL_FILE=""; warn 'пустой или недоступный SQL-источник'; return 1; }
 }
 
 decode_metadata_value() {
@@ -1038,6 +1095,7 @@ select_mode_interactive() {
 }
 
 wizard_build_summary() {
+    [[ "${MODE}" != 5 && "${MODE}" != 6 ]] || print_sql_plan
     if [[ "${MODE}" == 6 ]]; then
         printf 'SQL на существующей БД %s/%s/%s: %s\n' "${pg_ver}" "${cls_nm}" "${DATABASE_NAME}" "${SQL_FILE}"
         printf 'Отсутствующая цель: предупреждение и код 0; новые объекты не создаются.\n'
@@ -1054,7 +1112,13 @@ wizard_build_summary() {
     printf '\nПараметры создаваемого DEB-пакета:\n'
     printf '  Режим:               %s\n' "${MODE}"
     printf '  Политика кластера:    %s\n' "${CLUSTER_POLICY}"
-    [[ "${CLUSTER_POLICY}" != replace ]] || printf '  ВНИМАНИЕ: существующий целевой кластер будет остановлен и удалён без бэкапа.\n'
+    if [[ "${CLUSTER_POLICY}" == replace ]]; then
+        if [[ "${MODE}" == 3 ]]; then
+            printf '  ВНИМАНИЕ: при установке перед удалением кластера будет запрошен бэкап (холодный/горячий/без бэкапа).\n'
+        else
+            printf '  ВНИМАНИЕ: существующий целевой кластер будет остановлен и удалён без бэкапа.\n'
+        fi
+    fi
     printf '  Семейство:           %s\n' "${pg}"
     printf '  Версия PostgreSQL:   %s\n' "${pg_ver}"
     printf '  Серверный пакет:     %s\n' "${SERVER_PACKAGE}"
@@ -1077,8 +1141,9 @@ wizard_step() {
     case "${step}" in
         policy)
             local choice operation='восстановить горячий бэкап БД'
+            [[ "${MODE}" != 3 ]] || operation='восстановить холодный бэкап всего кластера'
             [[ "${MODE}" != 5 ]] || operation='создать БД и выполнить SQL'
-            printf '0 - Вернуться назад\n1 - Создать кластер и %s\n2 - Заменить кластер и %s\n' "${operation}" "${operation}"
+            printf '0 - Вернуться назад\n1 - Создать кластер и %s\n2 - Пересоздать кластер и %s\n' "${operation}" "${operation}"
             read -r -p 'Выбор: ' choice || return 2
             case "${choice}" in
                 1) CLUSTER_POLICY=create ;;
@@ -1142,7 +1207,14 @@ wizard_step() {
             [[ -z "${password_value}" ]] || cls_pw="${password_value}"
             [[ -n "${cls_pw}" ]] || return 1
             ;;
-        database) prompt_validated_value DATABASE_NAME 'Имя целевой БД' "${DATABASE_NAME}" validate_database_name 'недопустимое имя базы данных' || return $? ;;
+        database)
+            if [[ "${MODE}" == 3 ]]; then
+                printf 'Холодное восстановление включает все БД; имя БД ниже — только метка имени DEB.\n'
+                prompt_validated_value DATABASE_NAME 'Имя БД для имени DEB' "${DATABASE_NAME:-${cls_nm}}" validate_database_name 'недопустимое имя базы данных' || return $?
+            else
+                prompt_validated_value DATABASE_NAME 'Имя целевой БД' "${DATABASE_NAME}" validate_database_name 'недопустимое имя базы данных' || return $?
+            fi
+            ;;
         location) prompt_data_location || return $? ;;
         summary)
             PREFER_NEWEST_SERVER=no
@@ -1168,13 +1240,13 @@ interactive_configuration() {
         if [[ "${MODE}" == 6 ]]; then
             steps+=(version name database sql)
         elif [[ "${MODE}" != 1 ]]; then
-            [[ "${MODE}" != 4 && "${MODE}" != 5 ]] || steps+=(policy)
+            [[ "${MODE}" != 3 && "${MODE}" != 4 && "${MODE}" != 5 ]] || steps+=(policy)
             [[ "${MODE}" != 3 && "${MODE}" != 4 ]] || steps+=(backup)
             [[ "${MODE}" != 5 ]] || steps+=(sql)
             [[ "${MODE}" == 3 ]] || steps+=(family version package)
             steps+=(dependencies name port)
             [[ "${MODE}" == 3 ]] || steps+=(schema user password)
-            [[ "${MODE}" != 4 && "${MODE}" != 5 ]] || steps+=(database)
+            [[ "${MODE}" != 3 && "${MODE}" != 4 && "${MODE}" != 5 ]] || steps+=(database)
             steps+=(location)
         fi
         steps+=(summary)
@@ -1229,7 +1301,7 @@ default_server_package() {
 validate_options() {
     [[ "${MODE}" =~ ^[1-6]$ ]] || die "режим должен быть числом от 1 до 6"
     [[ "${CLUSTER_POLICY}" == create || "${CLUSTER_POLICY}" == replace ]] || die '--cluster-policy: create|replace'
-    [[ "${CLUSTER_POLICY}" != replace || "${MODE}" == 4 || "${MODE}" == 5 ]] || die 'замена кластера доступна только в режимах 4 и 5'
+    [[ "${CLUSTER_POLICY}" != replace || "${MODE}" == 3 || "${MODE}" == 4 || "${MODE}" == 5 ]] || die 'замена кластера доступна только в режимах 3, 4 и 5'
     if [[ "${MODE}" == 1 && -n "${EXTRA_DEPENDENCIES_INPUT}" ]]; then
         die "--depends поддерживается только в режимах 2–6"
     fi
@@ -1297,6 +1369,8 @@ validate_options() {
             ;;
         3)
             [[ -n "${BACKUP_FILE}" ]] || die "для режима 3 требуется --backup-file с холодным бэкапом"
+            DATABASE_NAME="${DATABASE_NAME:-${cls_nm}}"
+            validate_database_name "${DATABASE_NAME}" || die "недопустимое имя базы данных: ${DATABASE_NAME}"
             ;;
         4)
             [[ -n "${BACKUP_FILE}" ]] || die "для режима 4 требуется --backup-file с горячим бэкапом"
@@ -1306,7 +1380,8 @@ validate_options() {
         5|6)
             [[ -z "${BACKUP_FILE}" ]] || die "--backup-file применяется только в режимах 3 и 4"
             [[ -n "${SQL_FILE}" ]] || die "для режима ${MODE} требуется --sql-file"
-            SQL_FILE="$(resolve_sql_file "${SQL_FILE}")" || die "требуется доступный обычный файл .sql"
+            SQL_FILE="$(resolve_sql_file "${SQL_FILE}")" || die "требуется файл .sql или каталог"
+            prepare_sql_files || die "SQL-источник пуст или недоступен"
             validate_database_name "${DATABASE_NAME}" && ((${#DATABASE_NAME} <= 63)) || die "недопустимое имя базы данных: ${DATABASE_NAME}"
             if [[ "${MODE}" == 5 ]]; then
                 case "${DATABASE_NAME}" in postgres|template0|template1) die "режим 5 не изменяет служебные базы данных" ;; esac
@@ -1376,7 +1451,7 @@ write_last_build_script() {
         fi
         [[ -z "${BACKUP_FILE}" ]] || lines+=("--backup-file $(printf '%q' "${BACKUP_FILE}")")
         [[ -z "${SQL_FILE}" ]] || lines+=("--sql-file $(printf '%q' "${SQL_FILE}")")
-        [[ "${MODE}" != 4 && "${MODE}" != 5 && "${MODE}" != 6 ]] || lines+=("--database $(printf '%q' "${DATABASE_NAME}")")
+        [[ "${MODE}" != 3 && "${MODE}" != 4 && "${MODE}" != 5 && "${MODE}" != 6 ]] || lines+=("--database $(printf '%q' "${DATABASE_NAME}")")
     fi
     lines+=("--output-dir $(printf '%q' "${output_dir}")")
     lines+=("--force")
@@ -1406,18 +1481,18 @@ write_last_build_script() {
 }
 
 package_basename() {
-    local prefix=""
-    [[ "${CLUSTER_POLICY}" != replace ]] || prefix=re-
+    local prefix=cre
+    [[ "${CLUSTER_POLICY}" != replace ]] || prefix=rst
     case "${MODE}" in
         1) printf 'claster-creator-%s' "${SCRIPT_VERSION}" ;;
         2) printf 'claster-creator-%s-%s-%s-%s-empty' \
             "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${cls_nm}" ;;
-        3) printf 'claster-creator-%s-%s-%s-%s-full' \
-            "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${cls_nm}" ;;
-        4) printf 'claster-creator-%s-%s-%s-%s-%s' \
-            "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${prefix}${cls_nm}" "${DATABASE_NAME}" ;;
-        5) printf 'claster-creator-%s-%s-%s-%s-%s-sql' \
-            "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${prefix}${cls_nm}" "${DATABASE_NAME}" ;;
+        3) printf 'claster-creator-%s-%s-%s-%s-cld-%s-%s' \
+            "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${prefix}" "${cls_nm}" "${DATABASE_NAME:-${cls_nm}}" ;;
+        4) printf 'claster-creator-%s-%s-%s-%s-dmp-%s-%s' \
+            "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${prefix}" "${cls_nm}" "${DATABASE_NAME}" ;;
+        5) printf 'claster-creator-%s-%s-%s-%s-sql-%s-%s' \
+            "${SCRIPT_VERSION}" "${pg}" "${pg_ver}" "${prefix}" "${cls_nm}" "${DATABASE_NAME}" ;;
         6) printf 'claster-creator-%s-%s-%s-%s-sql-existing' \
             "${SCRIPT_VERSION}" "${pg_ver}" "${cls_nm}" "${DATABASE_NAME}" ;;
     esac
@@ -1458,7 +1533,7 @@ write_plan_value() {
 }
 
 create_install_plan() {
-    local package_base="$1" payload_dir="$2" backup_name="" sql_name=""
+    local package_base="$1" payload_dir="$2" backup_name="" sql_name="" file relative
     local plan_file="${payload_dir}/.package-install.env"
     if [[ -n "${BACKUP_FILE}" ]]; then
         backup_name="${BACKUP_FILE##*/}"
@@ -1466,9 +1541,27 @@ create_install_plan() {
         install -m 0600 -- "${BACKUP_FILE}" "${payload_dir}/package-data/${backup_name}"
     fi
     if [[ "${MODE}" == 5 || "${MODE}" == 6 ]]; then
-        sql_name=install.sql
         mkdir -p -- "${payload_dir}/package-data"
-        install -m 0600 -- "${SQL_FILE}" "${payload_dir}/package-data/${sql_name}"
+        prepare_sql_files || die 'SQL-источник изменился или недоступен'
+        if [[ -d "${SQL_FILE}" ]]; then
+            sql_name=sql-tree
+            mkdir -p -- "${payload_dir}/package-data/${sql_name}"
+            : >"${payload_dir}/package-data/sql-files.list"
+            for file in "${SQL_FILES[@]}"; do
+                relative="${file#"${SQL_FILE%/}/"}"
+                # dpkg rejects newlines in archive paths. Escape percent first
+                # to keep this mapping collision-free and the source order intact.
+                relative="${relative//%/%25}"
+                relative="${relative//$'\n'/%0A}"
+                relative="${relative//$'\r'/%0D}"
+                install -D -m 0600 -- "${file}" "${payload_dir}/package-data/${sql_name}/${relative}"
+                printf '%s\0' "${relative}" >>"${payload_dir}/package-data/sql-files.list"
+            done
+            chmod 0600 "${payload_dir}/package-data/sql-files.list"
+        else
+            sql_name=install.sql
+            install -m 0600 -- "${SQL_FILE}" "${payload_dir}/package-data/${sql_name}"
+        fi
     fi
     {
         write_plan_value mode "${MODE}"
@@ -1595,12 +1688,27 @@ repeat_changed_port_notice() {
 
 # Mode 6 never creates/deletes a cluster or database. Missing targets do not
 # produce a done marker, so a later configure can apply SQL once they exist.
+declare -a packaged_sql_files=()
+if [[ "${mode}" == 5 || "${mode}" == 6 ]]; then
+    if [[ "${sql_name}" == sql-tree ]]; then
+        [[ -r "${creator_dir}/package-data/sql-files.list" ]] || exit 1
+        while IFS= read -r -d '' relative; do
+            [[ -n "${relative}" && "${relative}" != /* && "/${relative}/" != */../* ]] || exit 1
+            packaged_sql_files+=("${packaged_sql}/${relative}")
+        done <"${creator_dir}/package-data/sql-files.list"
+    else
+        packaged_sql_files=("${packaged_sql}")
+    fi
+    ((${#packaged_sql_files[@]})) || exit 1
+    for sql_input in "${packaged_sql_files[@]}"; do
+        [[ -f "${sql_input}" && -r "${sql_input}" && ! -L "${sql_input}" ]] || exit 1
+    done
+fi
 if [[ "${mode}" == 6 ]]; then
     [[ "${force_install}" != 1 && "${force_db_install}" != 1 ]] || {
         printf 'ОШИБКА: принудительная переустановка не поддерживается в режиме 6.\n' >&2; exit 2;
     }
     [[ -e "${done_marker}" ]] && exit 0
-    [[ -f "${packaged_sql}" && -r "${packaged_sql}" && ! -L "${packaged_sql}" ]] || exit 1
     (
         source "${creator}"
         trap - EXIT
@@ -1609,7 +1717,7 @@ if [[ "${mode}" == 6 ]]; then
                 warn 'SQL уже запускался; проверьте частичные изменения перед ручным сбросом маркера'; exit 1;
             }
             touch -- "${sql_started_marker}"
-            execute_sql_checked "${pg_version}" "${cluster_name}" "${SQL_TARGET_PORT}" "${SQL_TARGET_DATA}" "${database_name}" "${packaged_sql}"
+            execute_sql_files_checked "${pg_version}" "${cluster_name}" "${SQL_TARGET_PORT}" "${SQL_TARGET_DATA}" "${database_name}" "${packaged_sql_files[@]}"
             touch -- "${done_marker}"
         else
             result=$?
@@ -1621,12 +1729,10 @@ fi
 
 # Validate payload before any destructive replacement.
 if [[ "${cluster_policy:-create}" == replace ]]; then
-    [[ "${mode}" == 4 || "${mode}" == 5 ]] || exit 2
+    [[ "${mode}" == 3 || "${mode}" == 4 || "${mode}" == 5 ]] || exit 2
     [[ "${force_db_install}" != 1 ]] || { printf 'ОШИБКА: замена кластера несовместима с CLASTER_FORCE_DB_INSTALL.\n' >&2; exit 2; }
-    if [[ "${mode}" == 4 ]]; then
+    if [[ "${mode}" == 3 || "${mode}" == 4 ]]; then
         [[ -f "${packaged_backup}" && -r "${packaged_backup}" ]] && tar -tzf "${packaged_backup}" >/dev/null || exit 1
-    else
-        [[ -f "${packaged_sql}" && -r "${packaged_sql}" && ! -L "${packaged_sql}" ]] || exit 1
     fi
 fi
 
@@ -1660,8 +1766,40 @@ else
     esac
 fi
 
+backup_before_cold_replacement() {
+    local choice backup_type backup_database answer
+    printf 'ПРЕДУПРЕЖДЕНИЕ: кластер %s/%s существует и будет пересоздан целиком.\n' "${pg_version}" "${cluster_name}"
+    printf '0 - Отмена\n1 - Холодный бэкап всего кластера\n2 - Горячий бэкап выбранной БД\n3 - Продолжить без бэкапа\n'
+    read -r -p 'Бэкап перед пересозданием [0]: ' choice || return 1
+    case "${choice}" in
+        1) backup_type=cold ;;
+        2)
+            backup_type=hot
+            printf 'ВНИМАНИЕ: горячий бэкап сохраняет одну БД, но удалён будет весь кластер.\n'
+            read -r -p 'Имя БД для горячего бэкапа: ' backup_database || return 1
+            [[ -n "${backup_database}" ]] || return 1
+            ;;
+        3)
+            read -r -p 'Удалить весь кластер БЕЗ бэкапа? [N/y]: ' answer || return 1
+            [[ "${answer}" =~ ^[Yy]$ ]]
+            return $?
+            ;;
+        *) return 1 ;;
+    esac
+    "${creator}" --action backup --pg-version "${pg_version}" \
+        --cluster-name "${cluster_name}" --backup-type "${backup_type}" \
+        --clear-wal no \
+        --database "${backup_database:-${database_name}}"
+}
+
 remove_existing_cluster() {
-    printf 'ПРЕДУПРЕЖДЕНИЕ: кластер %s/%s будет удалён без резервной копии и развёрнут заново.\n' \
+    if [[ "${mode}" == 3 && "${cluster_policy:-create}" == replace ]]; then
+        backup_before_cold_replacement || {
+            printf 'ОШИБКА: пересоздание отменено или бэкап не завершён; удаление не начато.\n' >&2
+            exit 1
+        }
+    fi
+    printf 'ПРЕДУПРЕЖДЕНИЕ: кластер %s/%s будет удалён и развёрнут заново (дополнительный бэкап при удалении не создаётся).\n' \
         "${pg_version}" "${cluster_name}"
     PGCC_ACTION=delete \
     PGCC_PACKAGE="${server_package}" \
@@ -1770,9 +1908,8 @@ apply_sql_file() (
         create_database "${sql_home}" "${sql_socket}" "${sql_port}" "${database_name}" "${schema_name}" || exit 1
     fi
     # Root opens the 0600 payload; the postgres child consumes it on stdin.
-    runuser -u postgres -- "${sql_home}/bin/psql" -X --no-password \
-        -h "${sql_socket}" -p "${sql_port}" -d "${database_name}" \
-        --set=ON_ERROR_STOP=1 --file=- <"${packaged_sql}" || {
+    execute_sql_files_checked "${sql_version}" "${sql_cluster}" "${sql_port}" "${sql_data}" \
+        "${database_name}" "${packaged_sql_files[@]}" || {
         printf 'ОШИБКА: выполнение SQL прервано; возможны частичные изменения. Проверьте БД. Для пересоздания кластера используйте CLASTER_FORCE_INSTALL=1.\n' >&2
         exit 1
     }
@@ -1820,9 +1957,6 @@ case "${mode}" in
         restore_hot_backup
         ;;
     5)
-        [[ -f "${packaged_sql}" && -r "${packaged_sql}" && ! -L "${packaged_sql}" ]] || {
-            printf 'Не найден встроенный SQL-файл %s\n' "${packaged_sql}" >&2; exit 1;
-        }
         [[ ! -e "${sql_started_marker}" ]] || {
             printf 'ОШИБКА: SQL уже запускался, но установка не завершена. Автоматический повтор запрещён; проверьте БД или пересоздайте кластер с CLASTER_FORCE_INSTALL=1.\n' >&2; exit 1;
         }

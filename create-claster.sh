@@ -15,7 +15,7 @@
 #   layouts remain accepted. Client/contrib/meta/extension packages are not servers.
 #   It can run as an interactive menu or as a fully non-interactive command.
 #   Screen clearing is limited to stdout terminals with a usable TERM.
-#   Edit menu item 4 executes a trusted SQL file on a selected existing database,
+#   Edit menu item 4 executes a trusted SQL file or tree on an existing database,
 #   only after explicit confirmation. psql runs as postgres with ON_ERROR_STOP.
 #   Cold restore resets only /var/log/postgresql to root:postgres 1775 after
 #   extraction, before startup; existing log-file permissions are not changed.
@@ -82,6 +82,10 @@
 #   current state with explicit y/N confirmation; no separate action selection.
 #   Interactive menu item 4 opens the Edit submenu: rename, port, data location,
 #   execute SQL. --action sql executes a trusted SQL file on an existing database.
+#   The interactive SQL picker also accepts a directory: recursively execute
+#   regular *.sql files in LC_ALL=C relative-path order, without following links.
+#   Confirm the frozen list; each file uses a separate psql session, stopping on
+#   the first error without rolling back earlier files. CLI remains file-only.
 #   --sql-file / PGCC_SQL_FILE selects the file; --if-missing / PGCC_IF_MISSING
 #   accepts error (default) or skip (warning and success for an absent target).
 #   Renaming uses pg_renamecluster with child-scoped PG_CLUSTER_CONF_ROOT,
@@ -124,7 +128,8 @@
 # Environment interface:
 #   Functional CLI options have ENV equivalents listed below; CLI wins over ENV.
 #   Supported ENV inputs survive the script's own sudo re-execution.
-#   Help/version have no ENV aliases. Start/stop, rename and SQL remain menu-only.
+#   Help/version have no ENV aliases. Start/stop and rename remain menu-only.
+#   SQL directory trees are menu-only; --sql-file / PGCC_SQL_FILE accept one file.
 #   PGCC_CFG selects a trusted configuration file; --config takes precedence.
 #   Priority: --config > PGCC_CFG > existing per-system config > script-local config.
 #   Relative paths use the invocation directory; empty PGCC_CFG means unset.
@@ -150,7 +155,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.5.7"
+readonly SCRIPT_VERSION="2.6.0"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -257,6 +262,7 @@ usage() {
 SQL выполняется от postgres только после y/Y; Enter — отказ. При ошибке psql
 останавливается, вывод остаётся до Enter; возможны частичные изменения.
 SQL: --action sql --pg-version N --cluster-name ИМЯ --database БД --sql-file ФАЙЛ.
+SQL в меню: файл или каталог с .sql (рекурсивно, порядок путей LC_ALL=C).
 --if-missing error|skip: отсутствие цели — ошибка (по умолчанию) или предупреждение с кодом 0.
 Переименовать: проверка нового имени, остановка,
 переименование регистрации/путей и служб; исходное состояние запуска сохраняется.
@@ -3786,10 +3792,51 @@ info_menu() {
     done
 }
 
+# Freeze a recursive SQL plan before confirmation. Do not follow directory or
+# file symlinks inside a tree; sort relative paths bytewise, independent of locale.
+collect_sql_files() {
+    local source="$1" file manifest
+    SELECTED_SQL_FILES=()
+    if [[ -d "${source}" ]]; then
+        manifest="$(mktemp)" || return 1
+        if ! (set -o pipefail; find "${source}" -type f -name '*.sql' -print0 | LC_ALL=C sort -z) >"${manifest}"; then
+            rm -f -- "${manifest}"
+            warn 'не удалось прочитать дерево SQL-каталога'
+            return 1
+        fi
+        mapfile -d '' -t SELECTED_SQL_FILES <"${manifest}"
+        rm -f -- "${manifest}"
+    elif [[ "${source}" == *.sql && -f "${source}" ]]; then
+        SELECTED_SQL_FILES=("${source}")
+    fi
+    ((${#SELECTED_SQL_FILES[@]})) || { warn 'не найдено обычных файлов .sql'; return 1; }
+    for file in "${SELECTED_SQL_FILES[@]}"; do
+        [[ -f "${file}" && -r "${file}" && ! -L "${file}" ]] || {
+            warn "SQL-файл недоступен: ${file}"; return 1;
+        }
+    done
+}
+
+execute_sql_files_checked() {
+    local version="$1" name="$2" port="$3" data="$4" database="$5" file result
+    shift 5
+    for file in "$@"; do
+        printf 'Выполнение SQL: %s\n' "${file}"
+        if execute_sql_checked "${version}" "${name}" "${port}" "${data}" "${database}" "${file}"; then
+            :
+        else
+            result=$?
+            warn "выполнение остановлено на файле ${file} (код ${result}); последующие файлы не выполнялись"
+            return "${result}"
+        fi
+    done
+}
+
 select_sql_file() {
     local file choice resolved i
     local -a files=()
     SELECTED_SQL_FILE=""
+    SELECTED_SQL_FILES=()
     if [[ -d "${backup_dir}" ]]; then
         while IFS= read -r -d '' file; do
             [[ -r "${file}" ]] && files+=("${file}")
@@ -3799,7 +3846,7 @@ select_sql_file() {
     for i in "${!files[@]}"; do
         printf '%3d - %s\n' "$((i + 1))" "${files[i]##*/}"
     done
-    printf '  0 - Вернуться назад\nМожно ввести относительный или полный путь к .sql, также при пустом списке.\n'
+    printf '  0 - Вернуться назад\nМожно ввести относительный или полный путь к .sql или каталогу, также при пустом списке.\n'
     read -r -p 'Выберите номер SQL-файла или введите путь: ' choice || return 2
     [[ -n "${choice}" && "${choice}" != 0 ]] || return 1
     file=""
@@ -3807,17 +3854,17 @@ select_sql_file() {
         for i in "${!files[@]}"; do
             [[ "${choice}" != "$((i + 1))" ]] || file="${files[i]}"
         done
-    elif [[ "${choice}" == /* || -f "${choice}" ]]; then
+    elif [[ "${choice}" == /* || -f "${choice}" || -d "${choice}" ]]; then
         file="${choice}"
     else
         file="${backup_dir%/}/${choice}"
     fi
-    if [[ "${file}" == *.sql ]] && resolved="$(realpath -e -- "${file}" 2>/dev/null)" &&
-        [[ -f "${resolved}" && -r "${resolved}" && "${resolved}" == *.sql ]]; then
+    if [[ -n "${file}" ]] && resolved="$(realpath -e -- "${file}" 2>/dev/null)" &&
+        collect_sql_files "${resolved}"; then
         SELECTED_SQL_FILE="${resolved}"
         return 0
     fi
-    warn 'требуется доступный для чтения обычный файл .sql'
+    warn 'требуется доступный файл .sql или непустой каталог с файлами .sql'
     pause
     return 1
 }
@@ -3880,6 +3927,8 @@ execute_sql_checked() {
 
 execute_sql_menu() {
     local page=cluster result row version name port status owner data log home socket_dir database file answer
+    local entry
+    local -a sql_files=()
     while true; do
         header
         step 'Кластер: Выполнить SQL'
@@ -3907,6 +3956,7 @@ execute_sql_menu() {
                 printf 'Цель: %s/%s/%s\n' "${version}" "${name}" "${database}"
                 if select_sql_file; then
                     file="${SELECTED_SQL_FILE}"
+                    sql_files=("${SELECTED_SQL_FILES[@]}")
                     page=confirm
                 else
                     result=$?
@@ -3915,11 +3965,16 @@ execute_sql_menu() {
                 fi
                 ;;
             confirm)
-                printf 'Файл: %s\nИспользуйте только доверенный SQL. Он выполняется от postgres; ошибка может оставить частичные изменения.\n0 - Вернуться назад\n' "${file}"
-                read -r -p "${version}/${name}/${database}: выполнить сценарий ${file##*/} ? [N/y] : " answer || return 0
+                if [[ -d "${file}" ]]; then
+                    printf 'Каталог: %s\nПорядок выполнения (LC_ALL=C, рекурсивно):\n' "${file}"
+                    for entry in "${sql_files[@]}"; do printf '  %s\n' "${entry#"${file%/}/"}"; done
+                    printf 'Каждый файл — отдельный сеанс psql. При первой ошибке остановка; общей транзакции нет.\n'
+                fi
+                printf 'Источник SQL: %s\nИспользуйте только доверенный SQL. Он выполняется от postgres; ошибка может оставить частичные изменения.\n0 - Вернуться назад\n' "${file}"
+                read -r -p "${version}/${name}/${database}: выполнить SQL из ${file##*/} ? [N/y] : " answer || return 0
                 if [[ "${answer}" == 0 ]]; then page=file; continue; fi
                 [[ "${answer}" =~ ^[Yy]$ ]] || { printf 'Выполнение SQL отменено.\n'; return 0; }
-                if execute_sql_checked "${version}" "${name}" "${port}" "${data}" "${database}" "${file}"; then
+                if execute_sql_files_checked "${version}" "${name}" "${port}" "${data}" "${database}" "${sql_files[@]}"; then
                     printf 'SQL-сценарий успешно выполнен: %s/%s/%s.\n' "${version}" "${name}" "${database}"
                 else
                     result=$?

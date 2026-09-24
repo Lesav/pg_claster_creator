@@ -35,7 +35,7 @@ check apt 0 apt-get --version
 check dpkg 0 dpkg --version
 check locale 0 locale
 check timezone 0 date --iso-8601=seconds
-check space 0 df -h / /mnt/d
+check space 0 df -h / "$repo"
 check audit 0 dpkg --audit
 check clusters 0 pg_lsclusters
 check services 0 systemctl list-units --all --no-pager 'postgres*' 'tantor*'

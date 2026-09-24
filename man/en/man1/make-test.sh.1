@@ -1,0 +1,84 @@
+.TH MAKE-TEST.SH 1 "2026-09-24" "pg_claster_creator" "Workspace tools"
+.SH NAME
+make-test.sh \- run test helpers on one local Linux host or WSL distribution
+.SH SYNOPSIS
+.B bash tools/make-test.sh
+.RB [ --local ]
+.RB [ --repo " DIR"]
+.RB [ --package " NAME"]
+.RB [ --port " PORT"]
+.RB [ --output-dir " DIR"]
+.SH DESCRIPTION
+Workspace-only launcher for TEST.md. No test starts without answering y/Y to
+the first default-No prompt. A second default-No prompt separately authorizes
+deleting all original clusters and reinstalling PostgreSQL/Tantor/common packages.
+An installed server takes precedence. If it has any original registered cluster,
+server/common reinstallation and dependency-removal tests are skipped. Original
+cluster deletion still requires the second confirmation. If no server is installed,
+provision by product priority (SE/Enterprise, BE, Free/PostgreSQL; newest major
+within each tier). The existing claster-creator package/config remain prerequisites.
+Declining the second runs isolated helpers and live SQL singl/struct-dirs on
+a private unregistered test_<random 1..9> PostgreSQL server with a free port.
+Only its private Unix socket is enabled. A test-local registry adapter exercises
+SQL functions without changing /etc/postgresql. Original clusters and packages
+are compared before/after. Destructive variants are skipped, not failures.
+.SH OPTIONS
+.TP
+.B --local
+Use the current Linux machine; requires root after confirmation. Default target.
+.TP
+.BI --repo " DIR"
+Source path visible on the target; defaults to the launcher's project directory.
+.TP
+.BI --package " NAME"
+Select an installed server for safe SQL; assert the detected server for destructive
+testing, which supports only one initial server installation.
+.TP
+.BI --port " PORT"
+Destructive QA base port, 60100 through 60800 in steps of 100. By default,
+randomly reserve an available 100-port range. Parallel WSL runs must share
+the evidence root: atomic reservations prevent overlapping test ranges.
+On interruption, retain the reservation until child processes have been checked.
+Safe SQL selects a free port automatically.
+.TP
+.BI --output-dir " DIR"
+Per-release evidence root on the target. Default: documented WSL backup path,
+or /tmp/pg_claster_creator/TEST-X.Y.Z on native Linux. An explicit --output-dir
+overrides this default. Copy results before temporary-directory cleanup/reboot.
+.TP
+.B --help
+Print usage without changes.
+.SH WINDOWS WRAPPER
+Run tools\\make-test.cmd --wsl DISTRO from Windows CMD or PowerShell.
+The wrapper computes /mnt/<lowercase drive>/.../tools/make-test.sh from its
+own directory and invokes it as root with --local. Both confirmations remain.
+Requires Windows PowerShell and WSL; UNC paths and nonstandard automount roots
+are unsupported. Extra options require direct invocation of .sh inside WSL.
+The Bash runner rejects --wsl and positional distribution names.
+.SH ENVIRONMENT
+Inherited PGCC_* and CLASTER_FORCE_* settings are cleared before testing.
+The launcher supplies internal PGCC_TEST_REPO/RELEASE/RUN/OUTPUT/HOST to helpers.
+.SH RESULTS
+Both modes exercise tools/sql-tests on a private temporary server: six nested
+scripts in relative-path order, then root 00.sql separately as the PASS/FAIL oracle.
+See sql-tree-result.log; the destructive mode names this stage sql-struct-dirs.
+Creates <output-dir>/<host>/<run-id>/TEST-X.Y.Z-journal.md for each run.
+The saved log directory is printed at exit, on both success and failure,
+once the directory has been created.
+Launcher output is stored in launcher/<stage>.log, separate from helper logs.
+Stage exit codes and error paths are printed on the console.
+Aligned start/finish lines show timestamps, PASS/FAIL and elapsed M:SS.mmm.
+Stages lasting longer than five seconds show elapsed M:SS, updated every
+second on one terminal line (separate lines when output is redirected).
+After helpers/audits finish, .log files larger than 100 KiB (102400 bytes)
+are compressed to .log.gz, including failed runs. Append .gz to journal log
+paths when applicable. Existing archives are never overwritten; symlinks are skipped.
+Existing project-root journals are neither modified nor used as a startup guard. Automated
+helper success is not full plan coverage; unverified variants remain untested.
+No automatic passed suffix. A host lock prevents concurrent launcher runs.
+Temporary source copies are retained on failure for recovery. No --yes bypass.
+.SH EXIT STATUS
+0: completed automated chain or cancellation; 1: test/cleanup failure;
+2: invalid arguments/prerequisites; 130/143: interrupted.
+.SH SEE ALSO
+TEST.md, create-claster.sh(1), create-claster-deb.sh(1)

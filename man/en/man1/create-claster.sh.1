@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-24" "pg_claster_creator 2.5.7" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-24" "pg_claster_creator 2.6.0" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -227,6 +227,15 @@ catalog are validated first. Active sessions are then terminated by
 .BR "dropdb --force" ,
 the complete database is recreated with its previous owner, and pg_restore runs
 without object-by-object cleanup. This avoids failures on inherited constraints.
+.SS SQL DIRECTORIES IN THE INTERACTIVE MENU
+The SQL picker accepts an absolute or relative directory path, including a path
+relative to backup-dir. It recursively collects regular *.sql files, skipping
+symlinks inside the tree. Relative paths are sorted bytewise with LC_ALL=C and
+shown before confirmation. Empty or unreadable trees are rejected.
+Each file uses a separate psql session on the selected database, with target
+revalidation before each execution. The first error stops the batch; earlier
+changes are not rolled back. The confirmed file list is not rescanned.
+The main CLI/ENV SQL still accepts a single file; the DEB builder also accepts trees.
 .SH ENVIRONMENT
 .SS SQL AUTOMATION
 --action sql --pg-version N --cluster-name NAME --database DB --sql-file FILE

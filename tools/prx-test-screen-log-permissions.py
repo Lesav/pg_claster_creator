@@ -125,10 +125,10 @@ echo 'PASS original members/metadata preserved; unsafe parent-tree archive refus
             os.environ['FIXTURE'] = previous
 
 # Assert integration ordering: extraction -> permission repair -> cluster start.
-code = (repo / 'create-claster.sh').read_text()
+code = (repo / 'create-claster.sh').read_text(encoding='utf-8')
 cold = code.split('restore_menu() {', 1)[1].split('\ninfo_menu() {', 1)[0]
 assert cold.index('--keep-directory-symlink') < cold.index('\n    restore_log_directory_permissions\n') < cold.index('start_cluster_checked')
 assert code.count('clear 2>/dev/null') == 1
-(logs / 'results.tsv').write_text(''.join(results))
+(logs / 'results.tsv').write_text(''.join(results), encoding='utf-8')
 print(''.join(results), end='')
 sys.exit(any('\tFAIL\t' in row for row in results))

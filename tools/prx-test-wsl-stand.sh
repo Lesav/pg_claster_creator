@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Environment: PGCC_TEST_HOST overrides the WSL evidence label for local Linux;
+# PGCC_TEST_OUTPUT overrides the per-release evidence root (also on local Linux).
 # Purpose: per-WSL run, with unconditional cleanup and timing.
 # Usage: PGCC_TEST_RELEASE=VERSION PGCC_TEST_RUN=RUN bash tools/prx-test-wsl-stand.sh DISTRO PACKAGE MAJOR FAMILY PORT [prepared]
 #   prepared resumes after a verified bootstrap recovery, keeping the initial stand.log.
@@ -12,8 +14,8 @@ release="${PGCC_TEST_RELEASE:?release required}"; token="${release//./}"
 export PGCC_TEST_RUN="${PGCC_TEST_RUN:?run required}" PGCC_TEST_RELEASE="$release"
 export PGCC_TEST_REPO="$repo"
 distro="$1"; package="$2"; v="$3"; family="$4"; port="$5"
-[[ "$distro" == "$WSL_DISTRO_NAME" && "$port" =~ ^60[1-8]00$ ]]
-base="/mnt/d/Ai/pg_claster_creator.backup/TEST-${release}/$distro/$PGCC_TEST_RUN"
+[[ "$distro" == "${PGCC_TEST_HOST:-${WSL_DISTRO_NAME:-}}" && "$port" =~ ^60[1-8]00$ ]]
+base="${PGCC_TEST_OUTPUT:-/mnt/d/Ai/pg_claster_creator.backup/TEST-${release}}/$distro/$PGCC_TEST_RUN"
 prepared="${6:-}"; [[ -z "$prepared" || "$prepared" == prepared ]]
 log="$base/stand${prepared:+-prepared}.log"
 [[ -d "$base/packages" && ! -e "$log" ]]
@@ -31,13 +33,16 @@ finish() {
     ((rc==0 && bad==0 && clean==0))
 }
 trap finish EXIT
-[[ -z "$(pg_lsclusters --no-header)" ]]
+registry="$(pg_lsclusters --no-header)" || exit 1
+[[ -z "$registry" ]]
 grep -q 'READ-ONLY minor gate rc=0' "$base/packages/run.log"
 [[ "$distro" != alse-1.8.6 ]] || export PGCC_OFFLINE_REMOVE=1
 bash "$repo/tools/prx-run-wsl-phases.sh" "$distro" "$package" "$v" "$family" "$port" "$prepared" || bad=1
-[[ -z "$(pg_lsclusters --no-header)" ]] || exit 1
+registry="$(pg_lsclusters --no-header)" || exit 1
+[[ -z "$registry" ]] || exit 1
 bash "$repo/tools/prx-test-live-install.sh" "$distro" "$v" "$port" || bad=1
-[[ -z "$(pg_lsclusters --no-header)" ]] || exit 1
+registry="$(pg_lsclusters --no-header)" || exit 1
+[[ -z "$registry" ]] || exit 1
 default_root="/var/lib/postgresql/$v"
 [[ "$family" != tantor-* ]] || default_root="/var/lib/postgresql/$family-$v"
 PGCC_TEST_RENAME=yes PGCC_DELETE_LOG_ROOT="$base/rename-delete" bash "$repo/tools/prx-test-cluster-delete-live.sh" "$repo" "$distro" "$v" "$port" "$default_root" || bad=1

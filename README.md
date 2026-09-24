@@ -2,7 +2,7 @@
 
 Manage PostgreSQL clusters on Astra Linux and compatible Debian-based systems using interactive Bash menus or command-line automation. Build Debian packages that install the tools and optionally deploy a cluster, restore a backup, or initialize a database from SQL.
 
-**Version:** 2.5.7 · **Language:** English | [Русский](README_ru.md)
+**Version:** 2.6.0 · **Language:** English | [Русский](README_ru.md)
 
 The spelling `claster` is retained in project, command, and package names for compatibility. Interactive messages and `--help` output are currently in Russian; script headers and manual pages include English documentation.
 
@@ -184,12 +184,12 @@ bash ./create-claster-deb.sh --config ./.new-claster.config \
   --mode 1 --non-interactive
 ```
 
-The output is `dist/claster-creator-2.5.7.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI and GitHub Actions check and build the package, retain it as a job artifact, and publish DEB/checksum attachments for matching `vX.Y.Z` tags. GitHub Actions uses a hosted Ubuntu runner and the automatic job token. See [CI and release builds](CI.md) for requirements, release guards and verification scope.
+The output is `dist/claster-creator-2.6.0.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI and GitHub Actions check and build the package, retain it as a job artifact, and publish DEB/checksum attachments for matching `vX.Y.Z` tags. GitHub Actions uses a hosted Ubuntu runner and the automatic job token. See [CI and release builds](CI.md) for requirements, release guards and verification scope.
 
 Install this scripts-only package on a host with the required repositories configured:
 
 ```bash
-sudo apt install ./dist/claster-creator-2.5.7.deb
+sudo apt install ./dist/claster-creator-2.6.0.deb
 ```
 
 | Mode | Action when the package is installed |
@@ -209,7 +209,9 @@ For automatic Postgres Pro selection in modes 4/5, `--pg-version` is a **minimum
 
 Every mode installs only these available root-level Markdown documents into `/usr/local/share/pg_claster_creator/`: `README.md`, `README_ru.md`, `CHANGELOG.md`, `CHANGELOG_ru.md`, and the latest `TEST-X.Y.Z-journal-passed.md` by numeric version. `CI.md`, `TEST.md`, other Markdown files, subdirectories such as `tests/`, and symbolic links are excluded. Command links are installed for the main and backup scripts in `/usr/local/bin`; invoke the installed builder by its full path. English and Russian manual pages are installed under `/usr/share/man/`.
 
-Modes 4/5 offer Create or Replace before the existing wizard. CLI: `--cluster-policy create|replace`; ENV: `PGCC_CLUSTER_POLICY` (default `create`). Replace stops and deletes only the exact target major/name **without backup**, then creates it and restores the hot dump (4) or applies SQL (5). Package names include `re-<cluster>-<database>`. A completed installation is not repeated; a failed deletion prevents creation. Pin `--package` when an exact Postgres Pro major is required.
+Modes 3/4/5 offer Create or Recreate (`--cluster-policy create|replace`, ENV `PGCC_CLUSTER_POLICY`, default `create`). Create skips an existing cluster with a warning and exit 0. Recreate replaces the exact major/name; an absent cluster is simply created. Cold mode 3 asks at installation time for a cold backup, a hot backup of a chosen database, or explicitly confirmed deletion without backup. Cancellation, EOF or backup failure prevents deletion; force does not bypass this prompt. A hot backup covers only the chosen database, not the whole cluster being deleted. Modes 4/5 retain replacement without backup. Completed installations do not repeat.
+
+Package names for modes 3/4/5: `claster-creator-X.Y.Z-<pg-family>-<pg-version>-<operation>-<cluster>-<database>.deb`, where `<operation>` is `cre-cld`, `rst-cld`, `cre-dmp`, `rst-dmp`, `cre-sql` or `rst-sql`. In cold mode, `--database` / `PGCC_DATABASE` is only a filename label (default: cluster name); every database in the cold archive is restored.
 
 Mode 6 installs scripts and executes a trusted SQL file on an existing major/name/database. Use `--pg-version`, `--cluster-name`, `--database`, `--sql-file` (or their PGCC equivalents). No server dependency is added, no cluster/database is created or started. Missing cluster/database: warning and exit 0, without a completion marker. Connection, permission and SQL errors remain failures. Successful SQL is not repeated; interrupted SQL requires manual review of the database and `.sql-started` marker. Both installation force flags are rejected in mode 6.
 
@@ -225,7 +227,37 @@ Deployment modes use progress/completion markers in `/var/lib/claster-creator`. 
 - Only restore trusted archives and execute trusted SQL. Cold restore resets `/var/log/postgresql` to `root:postgres` with mode `1775`; it does not reset existing log-file modes. WAL reset options are emergency operations with potential data loss, not routine backup maintenance.
 - Allow enough disk space and downtime for physical backups and data relocation. Validate backups by restoring them on an isolated host before relying on them in production.
 
+The interactive SQL picker also accepts a directory (absolute, relative to the
+invocation directory, or relative to backup-dir). It recursively selects regular
+`*.sql` files and shows their relative paths before confirmation, sorted bytewise
+with `LC_ALL=C` (for example `01.sql`, `02/schema.sql`, `10.sql`). Symlinks inside
+the tree are skipped. Empty or unreadable trees are rejected. Each file runs in
+a separate psql session on the selected database; the first error stops the batch.
+Earlier changes are not rolled back. The main CLI/ENV SQL still accepts one file.
+The DEB builder accepts directory trees in modes 5/6 via its picker, --sql-file
+and PGCC_SQL_FILE, using the same ordering and execution rules. Payload files
+have mode 0600; percent/CR/LF in packaged paths are encoded as %25/%0D/%0A.
+
+The full test plan in [TEST.md](TEST.md) distinguishes `singl` (one SQL file)
+and `struct-dirs` (a SQL directory tree). These are test labels, not CLI options.
+
 ## WSL notes
+
+The `tools/sql-tests/` fixture runs six nested SQL files in relative-path order,
+then its root `00.sql` separately for the final count/order PASS/FAIL verdict.
+Both `make-test.sh` modes exercise it on a private temporary server.
+
+Tests prefer the installed server. An original cluster suppresses server/common
+reinstallation, but not separately authorized cluster deletion. With no server,
+the destructive mode provisions the highest-priority available product server.
+
+Run workspace tests with `sudo bash tools/make-test.sh --local` or
+`tools\make-test.cmd --wsl mint22-3` from Windows. The wrapper derives the
+`/mnt/<drive>/.../tools/make-test.sh` path from its own location. The first prompt
+permits testing; the second separately permits a destructive run. Declining
+the second runs isolated checks and SQL on a temporary `test_<1–9>` server
+with a free port, preserving original clusters and packages. See [TEST.md](TEST.md)
+for prerequisites, coverage limitations and journal handling.
 
 Keep PGDATA and critical cluster directories on the Linux filesystem. A Windows mount such as `/mnt/d` may not enforce POSIX ownership or modes: use Windows access controls to protect stored archives. An unsupported mode change is not proof that permission checks passed; archive read/write failures remain errors.
 
@@ -238,13 +270,13 @@ This path is inactive on ordinary physical or virtual Linux hosts. It does not c
 - [Russian README](README_ru.md) — technical translation of this guide.
 - [CHANGELOG.md](CHANGELOG.md) — release history in English; [Russian original](CHANGELOG_ru.md).
 - [TEST.md](TEST.md) — test preparation, full test plan, cleanup rules, and result criteria (Russian).
-- [TEST-2.5.7-journal-passed.md](TEST-2.5.7-journal-passed.md) — latest recorded test run (Russian).
+- [TEST-2.6.0-journal-passed.md](TEST-2.6.0-journal-passed.md) — latest recorded test run (Russian).
 - English manuals: cluster management, backup wrapper, package builder.
 - [tools/INDEX.md](tools/INDEX.md) — reusable helper catalog; check each helper's header and environment assumptions before use.
 
 After DEB installation, use `man create-claster.sh`, `man create-claster-backup.sh`, or `man create-claster-deb.sh`. Russian pages can be selected with `LANG=ru_RU.UTF-8 man create-claster.sh` when that locale is available.
 
-The recorded 2.5.7 run covers eight WSL distributions: 35 of 61 required test IDs were fully confirmed, and 26 still have untested mandatory variants. No product failures were found in executed checks; cleanup passed. The journal has the explicitly requested `passed` suffix, but **this does not mean full coverage**. See the journal for skipped variants, reasons, and durations (10 min 23 s overall).
+The recorded 2.6.0 run covers eight WSL distributions: 27 of 61 required test IDs were fully confirmed, and 34 still have untested mandatory variants. No product failures were found in executed checks; cleanup passed. The journal has the explicitly requested `passed` suffix, but **this does not mean full coverage**. See the journal for skipped variants, reasons, and durations (6 min 19 s overall). The previous 2.5.7 journal is archived unchanged in tests/.
 
 Full testing is destructive: the plan can delete clusters and remove/reinstall server packages. Use disposable, explicitly authorized environments; follow **Начало тестирования** in `TEST.md`, not a blanket test command. Historical local journals live in ignored `tests/` and are not shipped. A journal included in a package is evidence of its stated scope, not certification of every feature.
 

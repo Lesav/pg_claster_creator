@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Environment: PGCC_TEST_HOST overrides the WSL evidence label for local Linux;
+# PGCC_TEST_OUTPUT overrides the per-release evidence root (also on local Linux).
 # Path note: If /mnt/d/Ai/pg_claster_creator or
 # /mnt/d/Ai/pg_claster_creator.backup does not match your filesystem,
 # adjust the paths before running. Set PGCC_TEST_REPO to the actual project
@@ -15,7 +17,7 @@ release="${PGCC_TEST_RELEASE:?release required}"; token="${release//./}"
 [[ "$release" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "${PGCC_TEST_RUN:-}" =~ ^run-[a-zA-Z0-9_-]+$ ]]
 output="${PGCC_TEST_OUTPUT:-/mnt/d/Ai/pg_claster_creator.backup/TEST-$release}"
 distro="$1"; v="$2"; port="$3"
-[[ "$WSL_DISTRO_NAME" == "$distro" && "$port" =~ ^[0-9]{5}$ ]]
+[[ "${PGCC_TEST_HOST:-${WSL_DISTRO_NAME:-}}" == "$distro" && "$port" =~ ^[0-9]{5}$ ]]
 base="$output/$distro/$PGCC_TEST_RUN"
 logs="$base/interactive"; [[ ! -e "$logs" ]]; mkdir "$logs"
 work="$(mktemp -d /var/tmp/pgcc-interactive.XXXXXX)"

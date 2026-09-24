@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Environment: PGCC_TEST_HOST overrides the WSL evidence label for local Linux;
+# PGCC_TEST_OUTPUT overrides the per-release evidence root (also on local Linux).
+# PGCC_TEST_KEEP_SERVER=1 preserves server/common packages after baseline selection.
 # Purpose: task wrapper for approved package removal and first workspace install.
 # Usage: PGCC_TEST_RELEASE=VERSION PGCC_TEST_RUN=RUN bash tools/prx-bootstrap-wsl-postgres.sh DISTRO PACKAGE MAJOR FAMILY PORT
 # Args: exact WSL name, original package, major, family, unique QA port; optional sixth argument is a recovery attempt label.
@@ -9,8 +12,8 @@ set -Eeuo pipefail
 repo="${PGCC_TEST_REPO:-/mnt/d/Ai/pg_claster_creator}"
 release="${PGCC_TEST_RELEASE:?release required}"; token="${release//./}"
 distro="$1"; package="$2"; major="$3"; family="$4"; port="$5"
-[[ "$distro" == "$WSL_DISTRO_NAME" && "$major" =~ ^[0-9]+$ && "$port" =~ ^[0-9]+$ ]]
-base="/mnt/d/Ai/pg_claster_creator.backup/TEST-${release}/$distro"
+[[ "$distro" == "${PGCC_TEST_HOST:-${WSL_DISTRO_NAME:-}}" && "$major" =~ ^[0-9]+$ && "$port" =~ ^[0-9]+$ ]]
+base="${PGCC_TEST_OUTPUT:-/mnt/d/Ai/pg_claster_creator.backup/TEST-${release}}/$distro"
 [[ -z "${PGCC_TEST_RUN:-}" ]] || base="$base/$PGCC_TEST_RUN"
 attempt="${6:-initial}"; [[ "$attempt" == initial || "$attempt" =~ ^recover[0-9]*$ || "$attempt" =~ ^resume[0-9]*$ ]]
 logs="$base/bootstrap"; [[ "$attempt" == initial ]] || logs="$base/bootstrap-$attempt"
@@ -38,6 +41,12 @@ if [[ ! -f "$work/config-shared" ]]; then
     install -m 0600 "$work/config-share" /usr/local/shared/pg_claster_creator/.new-claster.config
 fi
 fi
+if [[ "${PGCC_TEST_KEEP_SERVER:-0}" == 1 ]]; then
+    printf 'SKIP server/common removal and reinstallation: using selected installed server\n'
+    [[ "$(dpkg-query -W -f='${Status}' "$package")" == 'install ok installed' ]]
+    timeout -k 5 180 dpkg --force-confdef --force-confold -i "$repo/dist/claster-creator-${release}.deb" >"$logs/restore-product.log" 2>&1
+    exit 0
+fi
 mapfile -t packages <"$base/packages/removal-candidates.txt"
 if [[ "$distro" == alse-1.8.6 ]]; then
     filtered=()
@@ -51,9 +60,10 @@ fi
 [[ " ${packages[*]} " == *' postgresql-common '* && " ${packages[*]} " == *' postgresql-client-common '* ]]
 if [[ ! "$attempt" =~ ^recover ]]; then
 LC_ALL=C apt-get -s remove -- "${packages[@]}" >"$logs/removal-plan.log" 2>&1
+source "$repo/tools/prx-package-identity.sh"
 while read -r op removed rest; do
     [[ "$op" == Remv ]] || continue
-    [[ "$removed" == claster-creator || " ${packages[*]} " == *" $removed "* ]] || { echo "REFUSE unexpected removal: $removed"; exit 2; }
+    approved_removal "$removed" claster-creator "${packages[@]}" || { echo "REFUSE unexpected removal: $removed"; exit 2; }
 done <"$logs/removal-plan.log"
 if [[ "${PGCC_OFFLINE_REMOVE:-0}" == 1 ]]; then
     approved=("${packages[@]}")

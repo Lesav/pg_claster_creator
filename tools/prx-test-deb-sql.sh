@@ -61,7 +61,7 @@ mkdir "$work/backups/directory.sql"
     ! select_sql_interactive <<<99999999999999999999999999
     ! select_sql_interactive </dev/null
     ! resolve_sql_file "$work/backups/broken.sql"
-    ! resolve_sql_file "$work/backups/directory.sql"
+    if (SQL_FILE="$work/backups/directory.sql"; prepare_sql_files); then exit 1; fi
     ! resolve_sql_file "$work/backups/18-qa-20260912-010101.tar.gz"
     SQL_FILE="$work/backups/schema file.sql"
     validate_options
@@ -82,7 +82,7 @@ mkdir "$work/backups/directory.sql"
     grep -F -- "--config $(printf '%q' "$CONFIG_FILE")" "$work/create-claster-deb-last.sh"
     OUTPUT_DIR="$work/out"; build_package
     deb="$OUTPUT_DIR/$(package_basename).deb"
-    [[ "$deb" == *-qa-qa_db-sql.deb ]]
+    [[ "$deb" == *-cre-sql-qa-qa_db.deb ]]
     dpkg-deb -x "$deb" "$work/payload"
     dpkg-deb -e "$deb" "$work/control"
     cmp "$CONFIG_FILE" "$work/payload/usr/local/share/pg_claster_creator/.new-claster.config"
@@ -115,6 +115,8 @@ sed "s|readonly creator_dir=.*|readonly creator_dir=\"$payload\"|; s|readonly st
 cat >"$payload/create-claster.sh" <<'SH'
 #!/usr/bin/env bash
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    source "$QA_SQL_WORK/create-claster.sh"
+    trap - EXIT
     cluster_pg_home() { printf '%s' "$QA_SQL_WORK"; }
     cluster_socket_directory() { printf /tmp; }
     create_database() { touch "$QA_SQL_WORK/db"; printf 'CREATE_DB %s owner=%s\n' "$4" "$5" >>"$QA_SQL_WORK/events"; }

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Environment: PGCC_TEST_HOST overrides the WSL evidence label for local Linux;
+# PGCC_TEST_OUTPUT overrides the per-release evidence root (also on local Linux).
 # Purpose: final per-WSL audit; remove validated rename work and run-owned syslog backups.
 # Usage: PGCC_TEST_RELEASE=VERSION PGCC_TEST_RUN=RUN bash tools/prx-verify-wsl-test-cleanup.sh DISTRO PORT [RENAME_LOG_GROUP] [LABEL]
 # Args: DISTRO is the exact WSL name; PORT identifies owned QA paths; optional log group defaults to rename-delete.
@@ -12,8 +14,8 @@
 # Syslog backup deletion requires an exact path recorded by this run and a QA name.
 set -Eeuo pipefail
 distro="$1"; port="$2"
-[[ "$WSL_DISTRO_NAME" == "$distro" && "$port" =~ ^60[1-8]00$ ]]
-base="/mnt/d/Ai/pg_claster_creator.backup/TEST-${PGCC_TEST_RELEASE:?}/$distro/${PGCC_TEST_RUN:?}"
+[[ "${PGCC_TEST_HOST:-${WSL_DISTRO_NAME:-}}" == "$distro" && "$port" =~ ^60[1-8]00$ ]]
+base="${PGCC_TEST_OUTPUT:-/mnt/d/Ai/pg_claster_creator.backup/TEST-${PGCC_TEST_RELEASE:?}}/$distro/${PGCC_TEST_RUN:?}"
 label="${4:-}"; [[ -z "$label" || "$label" =~ ^[a-z0-9-]+$ ]]
 audit="$base/final-verification${label:+-$label}.log"
 [[ -f "$base/timing.tsv" && ! -e "$audit" ]]

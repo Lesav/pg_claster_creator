@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 # Purpose: read-only baseline and repository minor-version gate before package tests.
+# Environment: PGCC_TEST_KEEP_SERVER=1 skips repository/removal gates (no reinstall).
 # Usage: bash tools/prx-check-server-minor.sh LOG_DIR
 # Args: LOG_DIR -- new evidence directory on the requested per-WSL test path.
-# Output: installed packages, server versions, repository versions and gate results.
+# Output: installed packages, gzip-compressed APT listing, server/repository versions and gate results.
 # Example: bash tools/prx-check-server-minor.sh /mnt/d/test/Astra/packages
 set -Eeuo pipefail
 logs="$1"; [[ ! -e "$logs" ]]; mkdir -p "$logs"
 exec >"$logs/run.log" 2>&1
 date --iso-8601=seconds
 pg_lsclusters >"$logs/clusters-before.log"
-LC_ALL=ru_RU.UTF-8 apt list >"$logs/apt-list.log" 2>"$logs/apt-stderr.log"
-grep -E '(postg|tantor)' "$logs/apt-list.log" | grep установлен >"$logs/installed-selection.log" || true
-awk -F/ '{print $1}' "$logs/installed-selection.log" >"$logs/removal-candidates.txt"
+# Stream the listing into gzip; pipefail preserves APT and compression failures.
+LC_ALL=ru_RU.UTF-8 apt list 2>"$logs/apt-stderr.log" | gzip -c >"$logs/apt-list.log.gz"
+# Use machine-readable state: local Linux may not have the Russian APT locale.
+dpkg-query -W -f='${binary:Package}\t${db:Status-Status}\n' >"$logs/package-state.tsv"
+awk -F '\t' '$2=="installed" && $1 ~ /(postg|tantor)/ {print $1}' \
+    "$logs/package-state.tsv" >"$logs/removal-candidates.txt"
+cp "$logs/removal-candidates.txt" "$logs/installed-selection.log"
 [[ -s "$logs/removal-candidates.txt" ]] || { echo 'FAIL empty package list'; exit 1; }
 bad=0
 while IFS= read -r package; do
@@ -28,7 +33,7 @@ while IFS= read -r package; do
         case "$candidate" in "$version"|"$version".*|"$version"-*|"$version"+*|"$version"~*) available=yes ;; esac
     done <"$logs/$package-available.log"
     printf '%s\t%s\t%s\n' "$package" "$version" "$available" >>"$logs/server-minors.tsv"
-    [[ "$available" == yes ]] || bad=1
+    [[ "$available" == yes || "${PGCC_TEST_KEEP_SERVER:-0}" == 1 ]] || bad=1
 done <"$logs/removal-candidates.txt"
 [[ -s "$logs/server-minors.tsv" ]] || bad=1
 for baseline_package in postgresql-common postgresql-client-common claster-creator; do
@@ -37,7 +42,11 @@ for baseline_package in postgresql-common postgresql-client-common claster-creat
     fi
 done >"$logs/baseline-packages.log"
 mapfile -t removal_candidates <"$logs/removal-candidates.txt"
-LC_ALL=C apt-get -s remove -- "${removal_candidates[@]}" >"$logs/removal-plan.log" 2>&1 || bad=1
+if [[ "${PGCC_TEST_KEEP_SERVER:-0}" == 1 ]]; then
+    printf 'SKIP server package removal/reinstallation\n' >"$logs/removal-plan.log"
+else
+    LC_ALL=C apt-get -s remove -- "${removal_candidates[@]}" >"$logs/removal-plan.log" 2>&1 || bad=1
+fi
 dpkg --audit >"$logs/dpkg-audit.log"
 pg_lsclusters >"$logs/clusters-after.log"
 cmp "$logs/clusters-before.log" "$logs/clusters-after.log"

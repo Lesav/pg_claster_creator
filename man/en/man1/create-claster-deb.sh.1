@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-24" "pg_claster_creator 2.5.7" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-24" "pg_claster_creator 2.6.0" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -55,7 +55,7 @@ Install the files and restore a cluster from an embedded cold backup.
 Install the files, create a cluster, and restore an embedded hot database dump.
 .TP
 .B 5
-Install the files, create a cluster/database, and execute an embedded SQL file.
+Install the files, create a cluster/database, and execute embedded SQL files.
 Select a numbered .sql file from the backup directory or enter a relative or
 absolute path, even if the list is empty. Relative paths are resolved from the
 working directory first, then from the backup directory. Modes 3 and 4 list
@@ -67,7 +67,7 @@ Use trusted self-contained SQL only; included files are not bundled. Errors may
 leave partial changes. An interrupted SQL run is not replayed automatically;
 CLASTER_FORCE_INSTALL=1 recreates the entire target cluster without a backup.
 CLASTER_FORCE_DB_INSTALL is rejected for mode 5. Successful reconfiguration
-does not repeat SQL. The filename ends in -DATABASE-sql.deb.
+does not repeat SQL. Filenames use cre-sql/rst-sql (see PACKAGE NAMES).
 .PP
 For modes 2 through 5, postinst first checks the exact cluster version and name.
 If an unrelated cluster is already registered, postinst prints a warning, skips
@@ -117,9 +117,17 @@ uses the exact physical-backup version: its package depends on
 and the exact server package recorded in backup metadata, without an
 automatically added contrib package.
 .SH EXISTING SQL AND REPLACEMENT
-Modes 4/5 offer Create or Replace before the existing wizard. CLI: --cluster-policy create|replace; ENV: PGCC_CLUSTER_POLICY (default create). Replace stops and deletes only the exact target major/name without backup, then creates it and restores the hot dump (4) or applies SQL (5). Package names include re-<cluster>-<database>. A completed installation is not repeated; a failed deletion prevents creation. Pin --package when an exact Postgres Pro major is required.
+Modes 3/4/5 offer Create or Recreate (--cluster-policy create|replace, ENV PGCC_CLUSTER_POLICY, default create). Create skips an existing cluster with a warning and exit 0. Recreate replaces the exact major/name; an absent cluster is simply created. Cold mode 3 asks at installation time for a cold backup, a hot backup of a chosen database, or explicitly confirmed deletion without backup. Cancellation, EOF or backup failure prevents deletion; force does not bypass this prompt. A hot backup covers only the chosen database, not the whole cluster being deleted. Modes 4/5 retain replacement without backup. Completed installations do not repeat.
 
 Mode 6 installs scripts and executes a trusted SQL file on an existing major/name/database. Use --pg-version, --cluster-name, --database, --sql-file (or their PGCC equivalents). No server dependency is added, no cluster/database is created or started. Missing cluster/database: warning and exit 0, without a completion marker. Connection, permission and SQL errors remain failures. Successful SQL is not repeated; interrupted SQL requires manual review of the database and .sql-started marker. Both installation force flags are rejected in mode 6.
+.SS SQL DIRECTORY TREES
+The picker, --sql-file and PGCC_SQL_FILE accept a file or directory in modes 5/6.
+Regular *.sql files are collected recursively, excluding internal symlinks,
+and sorted by relative paths with LC_ALL=C. Empty/unreadable trees are rejected.
+The confirmed list is frozen and embedded with permissions 0600. Each file uses
+a separate psql session; stop on first error, no rollback of earlier changes.
+Failed batches are not automatically replayed. Percent/CR/LF in packaged paths
+are encoded as %25/%0D/%0A because dpkg rejects newlines in filenames.
 .SH OPTIONS
 .TP
 .BI --config " FILE"
@@ -140,8 +148,8 @@ Print the builder version and exit.
 Select mode 1, 2, 3, 4, 5, or 6.
 .TP
 .BI "--cluster-policy " create|replace
-Create the target cluster (default), or replace the exact target without a
-backup. Replacement is accepted only in modes 4 and 5.
+Create the target cluster (default), or recreate the exact target.
+Replacement is accepted in modes 3/4/5; mode 3 asks about backup before deletion.
 .TP
 .BI "--pg-family " FAMILY
 Select postgresql, postgrespro-ent, tantor-free, tantor-se (Special Edition), or tantor-be (Basic Edition).
@@ -177,13 +185,14 @@ it does not exist.
 Select a cold backup for mode 3 or a hot backup for mode 4.
 .TP
 .BI "--sql-file " FILE
-Embed a readable .sql file for mode 5/6; mode 5 rejects system databases.
+Embed a readable .sql file or directory tree for mode 5/6; mode 5 rejects system databases.
 .TP
 .BI "--backup-dir " DIRECTORY
 Select the directory used by interactive backup selection.
 .TP
 .BI "--database " NAME
-Set the target database for modes 4, 5 and 6.
+Set the target database for modes 4, 5 and 6. In mode 3 this is only a filename
+label (default: cluster name); cold restore restores the entire cluster.
 .TP
 .BI "--depends " PACKAGES
 Add comma-separated Debian package dependencies. The option may be repeated and
@@ -238,6 +247,9 @@ Booleans also accept true/false, 1/0, y/n. PGCC_DEPENDS is comma-separated;
 CLI --depends replaces the ENV list, then repeated CLI values accumulate.
 Bare SQL_FILE is not read. Help/version have no ENV aliases.
 .SH PACKAGE INSTALLATION ENVIRONMENT
+In cold mode 3 with replace policy, CLASTER_FORCE_INSTALL does not bypass
+the backup prompt. EOF, cancellation or backup failure prevents deletion.
+.PP
 The flags below apply to package installation, not to the builder.
 .PP
 .TP
@@ -264,8 +276,13 @@ CLASTER_FORCE_DB_INSTALL=1 dpkg -i PACKAGE.deb
 .nf
 claster-creator-VERSION.deb
 claster-creator-VERSION-PG-PGVER-CLUSTER-empty.deb
-claster-creator-VERSION-PG-PGVER-CLUSTER-full.deb
-claster-creator-VERSION-PG-PGVER-CLUSTER-DATABASE.deb
+claster-creator-VERSION-PG-PGVER-cre-cld-CLUSTER-DATABASE.deb
+claster-creator-VERSION-PG-PGVER-rst-cld-CLUSTER-DATABASE.deb
+claster-creator-VERSION-PG-PGVER-cre-dmp-CLUSTER-DATABASE.deb
+claster-creator-VERSION-PG-PGVER-rst-dmp-CLUSTER-DATABASE.deb
+claster-creator-VERSION-PG-PGVER-cre-sql-CLUSTER-DATABASE.deb
+claster-creator-VERSION-PG-PGVER-rst-sql-CLUSTER-DATABASE.deb
+claster-creator-VERSION-PGVER-CLUSTER-DATABASE-sql-existing.deb
 .fi
 .SH FILES
 .TP
