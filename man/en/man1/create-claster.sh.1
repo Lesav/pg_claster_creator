@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-14" "pg_claster_creator 2.5.6" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-09-24" "pg_claster_creator 2.5.7" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -52,7 +52,7 @@ file from the backup directory, or a relative/absolute path. 0 returns to the
 previous step. Only y/Y confirms; Enter cancels. The target is rechecked before
 psql runs as postgres with -X, --no-password and ON_ERROR_STOP. Output remains
 visible until Enter. Use trusted self-contained SQL; errors may leave partial
-changes. SHOW server_version; is a harmless test. No SQL CLI action is added.
+changes. SHOW server_version; is a harmless test. CLI SQL is also supported; see SQL AUTOMATION.
 .PP
 Edit item 1 renames a cluster using pg_renamecluster after validating
 the new name within the same major version and stopping the source cluster.
@@ -124,7 +124,15 @@ Print complete usage information and exit.
 Print the program version and exit.
 .TP
 .BI "-a, --action " ACTION
-Select a non-interactive action.
+Select a non-interactive action: info, install, port, move-data, backup,
+restore, delete, or sql.
+.TP
+.BI "--sql-file " FILE
+Select a trusted readable .sql file for the sql action.
+.TP
+.BI "--if-missing " error|skip
+Treat an absent SQL cluster/database as an error (default) or a successful
+warning-only skip. Connection and SQL errors are never skipped.
 .TP
 .BI "--package " PACKAGE
 Select an exact PostgreSQL server package.
@@ -220,8 +228,14 @@ catalog are validated first. Active sessions are then terminated by
 the complete database is recreated with its previous owner, and pg_restore runs
 without object-by-object cleanup. This avoids failures on inherited constraints.
 .SH ENVIRONMENT
-SQL execution is interactive only. There is no --action sql, --sql-file or
-PGCC_SQL_FILE input. Use the Edit menu to select a trusted SQL file.
+.SS SQL AUTOMATION
+--action sql --pg-version N --cluster-name NAME --database DB --sql-file FILE
+executes trusted SQL on the exact online target. CLI overrides PGCC_ACTION,
+PGCC_PG_VERSION, PGCC_CLUSTER_NAME, PGCC_DATABASE and PGCC_SQL_FILE.
+--if-missing error|skip (PGCC_IF_MISSING) defaults to error. Skip warns and returns
+0 only for an absent cluster/database; connection and SQL errors still fail.
+No packages, clusters or databases are installed/created. Relative SQL paths use
+ the invocation directory. Failed SQL may leave partial changes.
 .PP
 Command-line options override the corresponding variables:
 .BR PGCC_ACTION ,
@@ -238,6 +252,8 @@ Command-line options override the corresponding variables:
 .BR PGCC_BACKUP_FILE ,
 .BR PGCC_BACKUP_TYPE ,
 .BR PGCC_DATABASE ,
+.BR PGCC_SQL_FILE ,
+.BR PGCC_IF_MISSING ,
 .BR PGCC_BACKUP_BEFORE_DELETE ,
 .BR PGCC_CLEAR_WAL ,
 and

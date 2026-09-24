@@ -52,7 +52,7 @@ class Tests(unittest.TestCase):
         root = Path(self.temp.name)
         self.deb = root / 'claster-creator-2.5.5.deb'
         self.deb.write_bytes(b'fixture-deb')
-        self.sums = root / 'SHA256SUMS'
+        self.sums = root / 'claster-creator-2.5.5.sha256'
         self.sums.write_bytes(f'{publisher.digest(self.deb.read_bytes())}  {self.deb.name}\n'.encode())
         self.notes = root / 'CHANGELOG.md'
         self.notes.write_text('## 2.5.5\n\nRelease notes.\n')
@@ -74,7 +74,7 @@ class Tests(unittest.TestCase):
         self.assertEqual((c.created, c.uploaded), (0, 0))
 
     def test_conflict_before_any_upload(self):
-        c = Fake({'SHA256SUMS': b'wrong'})
+        c = Fake({self.sums.name: b'wrong'})
         with self.assertRaisesRegex(ValueError, 'Existing asset differs'):
             self.run_publish(c)
         self.assertEqual(c.uploaded, 0)
@@ -98,13 +98,23 @@ class Tests(unittest.TestCase):
 
     def test_bad_checksum(self):
         self.sums.write_text('wrong')
-        with self.assertRaisesRegex(ValueError, 'SHA256SUMS'):
+        with self.assertRaisesRegex(ValueError, r'\.sha256'):
             publisher.prepare(self.args)
 
     def test_prepare_valid_files_and_reused_notes_parser(self):
         files, notes = publisher.prepare(self.args)
-        self.assertEqual(set(files), {self.deb.name, 'SHA256SUMS'})
+        self.assertEqual(set(files), {self.deb.name, self.sums.name})
         self.assertEqual(notes, 'Release notes.')
+
+    def test_legacy_checksum_not_selected_for_release(self):
+        (Path(self.temp.name) / 'SHA256SUMS').write_bytes(b'legacy compatibility file')
+        files, _ = publisher.prepare(self.args)
+        self.assertNotIn('SHA256SUMS', files)
+
+    def test_legacy_checksum_does_not_replace_missing_versioned_file(self):
+        self.sums.rename(Path(self.temp.name) / 'SHA256SUMS')
+        with self.assertRaisesRegex(ValueError, 'regular release file'):
+            publisher.prepare(self.args)
 
     def test_listing_failure_does_not_create_release(self):
         c = Fake(exists=False)

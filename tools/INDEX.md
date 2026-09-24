@@ -9,6 +9,7 @@ prx-publish-gitflic-release.py — publish tag releases with verified attachment
 prx-test-gitflic-publisher.py — test release publishing guards and sanitized HTTP diagnostics offline
 prx-install-release-wsl.sh — install a scripts-only release and verify cluster/config preservation
 prx-test-deb-tmp-cleanup.sh — test builder temporary directory ownership and cleanup
+prx-test-deb-existing.sh — isolated mode 6 SQL and mode 4/5 replacement, CLI/ENV and postinst guards
 prx-test-wsl-preflight.sh — collect WSL baseline and test informational CLI and man
 prx-check-server-minor.sh — record installed servers, check repository minor versions and simulate package removal
 prx-remove-wsl-postgres-packages.sh — remove a reviewed package set on empty WSL with offline service handling and evidence

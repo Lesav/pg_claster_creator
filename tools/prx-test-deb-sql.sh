@@ -73,7 +73,7 @@ mkdir "$work/backups/directory.sql"
     if (MODE=2; validate_options); then exit 1; fi
     # The complete wizard uses SQL, then the same parameter steps as mode 4.
     MODE=5; SQL_FILE=""; DATABASE_NAME=qa_db
-    interactive_configuration <<<$'1\n5\n18\n\n\n\n\n\n\n\n\n1\ny'
+    interactive_configuration <<<$'1\n1\n5\n18\n\n\n\n\n\n\n\n\n1\ny'
     [[ "$MODE" == 5 && "$DATABASE_NAME" == qa_db ]]
     validate_options
     write_last_build_script

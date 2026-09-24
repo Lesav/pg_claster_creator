@@ -2,21 +2,24 @@
 
 ## GitHub Actions
 
-For release **2.5.6**, the local build, eight-WSL regression
-and 31 offline publisher tests have run after separate approval; see
-[the journal](TEST-2.5.6-journal-passed.md) for the documented coverage gaps.
+For release **2.5.7**, run the scripts-only build, publisher tests, CLI/ENV
+contracts and the isolated mode 5/6/create-replace regressions described in
+[TEST.md](TEST.md). The latest eight-WSL journal remains the historical 2.5.6
+run and does not cover the new 2.5.7 behavior; see
+[the journal](TEST-2.5.6-journal-passed.md) for its documented coverage gaps.
 The successful GitHub branch run for commit `08c77ab` verified the preceding
 CI setup. Publish reviewed release commits by fast-forwarding the default branch
 and `release/2.x`, then creating a new annotated version tag. Keep `release/1.x`
 on its latest 1.x release and preserve every existing tag. Branch pushes also
-start CI; version tags enable release publication. Publication of 2.5.6 on GitHub
-and the internal GitFlic is verified separately from the historical WSL journal.
+start CI; version tags enable release publication. Publication of each release
+on GitHub and the internal GitFlic is verified separately from the historical
+WSL journal.
 
 `.github/workflows/deb-release.yml` runs on GitHub-hosted Ubuntu 24.04:
 
 - Pushes to `master` / `release/**` and pull requests run offline publisher tests,
   Bash syntax checks and the existing scripts-only DEB build/content verification.
-- Pushing a new `vX.Y.Z` tag also publishes the DEB and `SHA256SUMS` to GitHub Releases.
+- Pushing a new `vX.Y.Z` tag also publishes the DEB and `claster-creator-X.Y.Z.sha256` to GitHub Releases.
   The tag must match the script version and the exact build commit on GitHub.
 - **Actions → DEB build and release → Run workflow** builds a selected branch
   without publishing. A dispatch explicitly targeting a tag publishes only when
@@ -75,12 +78,23 @@ The runner also needs its vendor-matched Java runtime, `helper.jar` and
    directories must not enter the package. No DEB is installed and no cluster
    operation is executed.
 2. `dist/` is uploaded as a job artifact (30-day retention). It contains the DEB,
-   `SHA256SUMS`, `package-contents.txt` and `build.log`. These files stay ignored
+   `claster-creator-X.Y.Z.sha256`, `SHA256SUMS` (compatibility copy),
+   `package-contents.txt` and `build.log`. These files stay ignored
    by Git. A clean environment prevents host `PGCC_*` values entering packages.
 3. Only tags matching `vX.Y.Z` run `publish-release` after the successful build.
    The tag must match the script version. The publisher creates a release from
    that version's English changelog entry, checks its commit, uploads the DEB
    and checksums, then downloads attachments again to verify SHA-256.
+
+New releases attach only the versioned `.sha256` checksum file, not the
+compatibility `SHA256SUMS` copy. Check with
+`sha256sum -c claster-creator-X.Y.Z.sha256` beside the downloaded DEB.
+Existing releases are not renamed or overwritten automatically.
+GitFlic uploads use multipart `Content-Type: text/plain` for `.sha256` and
+legacy `SHA256SUMS`; the enclosing request remains `multipart/form-data`.
+GitFlic 4.5.0 also requires the server-side release validator to accept safe
+`.sha256` names and validate checksum contents. Changing the HTTP type alone
+does not bypass that policy; do not enable unrestricted `text/plain` uploads.
 
 Release attachments are independent of expiring job artifacts. The publisher
 requires **GITFLIC_RELEASE_TOKEN**, a user API token supplied as a secret project

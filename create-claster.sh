@@ -75,12 +75,15 @@
 #   move-data  Move a cluster data directory to a default or custom location.
 #   backup     Create a cold cluster backup or a hot database backup.
 #   restore    Restore a cold cluster backup or a hot database dump.
+#   sql        Execute a trusted .sql file on an existing online cluster/database.
 #   delete     Delete a cluster or, interactively, one database. The menu offers
 #              a cold cluster backup or hot database backup before deletion.
 #   Interactive menu item 3 selects a cluster, then offers the opposite of its
 #   current state with explicit y/N confirmation; no separate action selection.
 #   Interactive menu item 4 opens the Edit submenu: rename, port, data location,
-#   execute SQL. SQL execution is interactive only: no --action sql or --sql-file.
+#   execute SQL. --action sql executes a trusted SQL file on an existing database.
+#   --sql-file / PGCC_SQL_FILE selects the file; --if-missing / PGCC_IF_MISSING
+#   accepts error (default) or skip (warning and success for an absent target).
 #   Renaming uses pg_renamecluster with child-scoped PG_CLUSTER_CONF_ROOT,
 #   preserves state/autostart and rewrites complete paths only once. Effective
 #   data/HBA/ident paths are checked before start; standard log links are updated.
@@ -93,6 +96,8 @@
 #   -h, --help                         Print detailed usage information.
 #   -v, --version                      Print the script version.
 #   -a, --action ACTION                Select a non-interactive action.
+#       --sql-file FILE                Trusted .sql file for action sql.
+#       --if-missing error|skip        Missing SQL target policy (default error).
 #       --package PACKAGE              Select an exact PostgreSQL server package.
 #       --pg-family FAMILY             postgresql, postgrespro-ent, tantor-free, tantor-se, tantor-be.
 #       --pg-version VERSION           Select the PostgreSQL major version.
@@ -131,7 +136,7 @@
 #   PGCC_CLEAR_WAL, and PGCC_OVERWRITE mirror the command-line options.
 #   PGCC_CLUSTER_PORT maps to --port; PGCC_DB_USER to --user;
 #   PGCC_DB_PASSWORD to --password; PGCC_DATABASE to --database.
-#   There is no PGCC_SQL_FILE input. Select the SQL file in the Edit menu.
+#   PGCC_SQL_FILE and PGCC_IF_MISSING mirror the SQL command-line options.
 #
 # Configuration:
 #   Without --config/PGCC_CFG, prefer the existing per-system file
@@ -145,7 +150,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.5.6"
+readonly SCRIPT_VERSION="2.5.7"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -226,6 +231,8 @@ declare ARG_BACKUP_DIR=""
 declare ARG_BACKUP_FILE=""
 declare ARG_BACKUP_TYPE=""
 declare ARG_DATABASE_NAME=""
+declare ARG_SQL_FILE=""
+declare ARG_IF_MISSING=""
 declare ARG_BACKUP_BEFORE_DELETE=""
 declare ARG_CLEAR_WAL=""
 declare ARG_OVERWRITE=""
@@ -249,7 +256,8 @@ usage() {
 каталоге бэкапов либо относительный/абсолютный путь. 0 — на предыдущий шаг.
 SQL выполняется от postgres только после y/Y; Enter — отказ. При ошибке psql
 останавливается, вывод остаётся до Enter; возможны частичные изменения.
-SQL доступен только через меню: --action sql и --sql-file не поддерживаются.
+SQL: --action sql --pg-version N --cluster-name ИМЯ --database БД --sql-file ФАЙЛ.
+--if-missing error|skip: отсутствие цели — ошибка (по умолчанию) или предупреждение с кодом 0.
 Переименовать: проверка нового имени, остановка,
 переименование регистрации/путей и служб; исходное состояние запуска сохраняется.
 До запуска проверяются пути data/HBA/ident; автозапуск переносится без enable/disable.
@@ -274,7 +282,9 @@ SQL доступен только через меню: --action sql и --sql-fil
       --config ФАЙЛ                  Предпочтительный конфиг; переопределяет PGCC_CFG
   -h, --help                         Показать эту справку и выйти
   -v, --version                      Показать версию сценария и выйти
-  -a, --action ДЕЙСТВИЕ              info|install|port|move-data|backup|restore|delete
+  -a, --action ДЕЙСТВИЕ              info|install|port|move-data|backup|restore|delete|sql
+      --sql-file ФАЙЛ                Доверенный .sql для действия sql
+      --if-missing error|skip        Отсутствующая цель SQL: ошибка или пропуск
       --package ПАКЕТ                Точный серверный пакет PostgreSQL
       --pg-family СЕМЕЙСТВО          postgresql|postgrespro-ent|tantor-free|tantor-se|tantor-be
       --pg-version ВЕРСИЯ            Версия PostgreSQL, например 16
@@ -311,7 +321,7 @@ SQL доступен только через меню: --action sql и --sql-fil
 Приоритет значений: ключи командной строки > PGCC_* > значения конфига.
 PGCC_CLUSTER_PORT соответствует --port, PGCC_DB_USER — --user,
 PGCC_DB_PASSWORD — --password, PGCC_DATABASE — --database.
-Переменной PGCC_SQL_FILE нет; SQL-файл выбирается интерактивно.
+PGCC_SQL_FILE и PGCC_IF_MISSING: SQL-файл и политика отсутствующей цели.
 
 Примеры:
   ${SCRIPT_NAME}
@@ -394,6 +404,10 @@ parse_args() {
             --backup-type=*) ARG_BACKUP_TYPE="${1#*=}"; shift ;;
             --database) option_value_required "$@"; ARG_DATABASE_NAME="$2"; shift 2 ;;
             --database=*) ARG_DATABASE_NAME="${1#*=}"; shift ;;
+            --sql-file) option_value_required "$@"; ARG_SQL_FILE="$2"; shift 2 ;;
+            --sql-file=*) ARG_SQL_FILE="${1#*=}"; shift ;;
+            --if-missing) option_value_required "$@"; ARG_IF_MISSING="$2"; shift 2 ;;
+            --if-missing=*) ARG_IF_MISSING="${1#*=}"; shift ;;
             --backup-before-delete) option_value_required "$@"; ARG_BACKUP_BEFORE_DELETE="$2"; shift 2 ;;
             --backup-before-delete=*) ARG_BACKUP_BEFORE_DELETE="${1#*=}"; shift ;;
             --clear-wal) option_value_required "$@"; ARG_CLEAR_WAL="$2"; shift 2 ;;
@@ -421,6 +435,9 @@ apply_runtime_options() {
     INSTALL_DATA_ROOT="${ARG_DATA_ROOT:-${PGCC_DATA_ROOT:-}}"
     BACKUP_FILE="${ARG_BACKUP_FILE:-${PGCC_BACKUP_FILE:-}}"
     DATABASE_NAME="${ARG_DATABASE_NAME:-${PGCC_DATABASE:-}}"
+    SQL_FILE="${ARG_SQL_FILE:-${PGCC_SQL_FILE:-}}"
+    SQL_IF_MISSING="${ARG_IF_MISSING:-${PGCC_IF_MISSING:-error}}"
+    [[ "${SQL_IF_MISSING}" == error || "${SQL_IF_MISSING}" == skip ]] || die "--if-missing: error|skip"
     [[ -n "${DATABASE_NAME}" ]] && TARGET_DATABASE_SET=1
 
     if [[ -n "${PGCC_PG_FAMILY:-}" ]]; then pg="${PGCC_PG_FAMILY}"; fi
@@ -455,8 +472,8 @@ apply_runtime_options() {
         case "${ACTION,,}" in
             change-port|switch-port) ACTION=port ;;
             move|relocate-data) ACTION=move-data ;;
-            info|install|port|move-data|backup|restore|delete) ACTION="${ACTION,,}" ;;
-            *) die "неподдерживаемое действие ${ACTION}; используйте info|install|port|move-data|backup|restore|delete" ;;
+            info|install|port|move-data|backup|restore|delete|sql) ACTION="${ACTION,,}" ;;
+            *) die "неподдерживаемое действие ${ACTION}; используйте info|install|port|move-data|backup|restore|delete|sql" ;;
         esac
         NON_INTERACTIVE=1
     fi
@@ -714,7 +731,7 @@ require_root() {
         for variable in PGCC_CFG PGCC_ACTION PGCC_PACKAGE PGCC_PG_FAMILY PGCC_PG_VERSION \
             PGCC_CLUSTER_NAME PGCC_CLUSTER_PORT PGCC_SCHEMA PGCC_DB_USER PGCC_DB_PASSWORD \
             PGCC_DATA_ROOT PGCC_BACKUP_DIR PGCC_BACKUP_FILE PGCC_BACKUP_TYPE PGCC_DATABASE \
-            PGCC_BACKUP_BEFORE_DELETE PGCC_CLEAR_WAL PGCC_OVERWRITE; do
+            PGCC_BACKUP_BEFORE_DELETE PGCC_CLEAR_WAL PGCC_OVERWRITE PGCC_SQL_FILE PGCC_IF_MISSING; do
             [[ ! -v "$variable" ]] || config_env+=("$variable=${!variable}")
         done
         command -v sudo >/dev/null 2>&1 || die "сценарий нужно запускать от root"
@@ -3805,6 +3822,39 @@ select_sql_file() {
     return 1
 }
 
+# Resolve exactly version/name. Return 10 only for a confirmed absent target;
+# registry, connection and permission failures must never become a successful skip.
+resolve_sql_target() {
+    local version="$1" name="$2" database="$3" listing row home socket exists
+    listing="$(pg_lsclusters --no-header)" || return 1
+    row="$(printf '%s\n' "${listing}" | awk -v v="${version}" -v n="${name}" '$1==v && $2==n {print}')"
+    [[ -n "${row}" ]] || { warn "кластер ${version}/${name} не найден; SQL не выполнен"; return 10; }
+    local v n port status owner data log
+    read -r v n port status owner data log <<<"${row}"
+    [[ "${status}" == online* ]] || { warn 'целевой кластер не запущен'; return 1; }
+    validate_database_name "${database}" || return 1
+    home="$(cluster_pg_home "${version}" "${data}")" || return 1
+    socket="$(cluster_socket_directory "${port}")" || return 1
+    exists="$(runuser -u postgres -- "${home}/bin/psql" -X --no-password -h "${socket}" -p "${port}" -d postgres -v ON_ERROR_STOP=1 -Atqc "SELECT 1 FROM pg_database WHERE datname='${database}'")" || return 1
+    [[ "${exists}" == 1 ]] || { warn "БД ${version}/${name}/${database} не найдена; SQL не выполнен"; return 10; }
+    SQL_TARGET_PORT="${port}"
+    SQL_TARGET_DATA="${data}"
+}
+
+execute_sql_noninteractive() {
+    local file result
+    ((TARGET_VERSION_SET && TARGET_NAME_SET && TARGET_DATABASE_SET)) || die 'для SQL явно укажите версию, кластер и БД'
+    [[ "${pg_ver}" =~ ^[0-9]+$ ]] && validate_database_name "${cls_nm}" && validate_database_name "${DATABASE_NAME}" || die 'недопустимая цель SQL'
+    file="$(realpath -e -- "${SQL_FILE}" 2>/dev/null)" || die 'SQL-файл не найден'
+    [[ "${file}" == *.sql && -f "${file}" && -r "${file}" ]] || die 'требуется доступный файл .sql'
+    if resolve_sql_target "${pg_ver}" "${cls_nm}" "${DATABASE_NAME}"; then
+        execute_sql_checked "${pg_ver}" "${cls_nm}" "${SQL_TARGET_PORT}" "${SQL_TARGET_DATA}" "${DATABASE_NAME}" "${file}"
+    else
+        result=$?
+        [[ "${result}" == 10 && "${SQL_IF_MISSING}" == skip ]] || return 1
+    fi
+}
+
 execute_sql_checked() {
     local version="$1" name="$2" port="$3" data="$4" database="$5" file="$6"
     local listing row home socket_dir
@@ -3951,6 +4001,10 @@ main() {
     require_root "$@"
     load_config
     apply_runtime_options
+    if [[ "${ACTION}" == sql ]]; then
+        execute_sql_noninteractive
+        return $?
+    fi
     if ((!NON_INTERACTIVE)); then
         header
         step "Подготовка пакетов"

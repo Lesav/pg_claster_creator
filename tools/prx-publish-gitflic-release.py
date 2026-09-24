@@ -6,6 +6,8 @@
 #   --api-url URL overrides the derived API root but must use the same origin
 #   (gitflic.ru -> api.gitflic.ru is the only cross-origin exception).
 # Output: A release with SHA-256-verified attachments; existing equal files are reused.
+#   Checksum attachments (*.sha256 and legacy SHA256SUMS) use text/plain;
+#   binary attachments retain application/octet-stream.
 # Environment: CI_PROJECT_URL, CI_COMMIT_TAG, CI_COMMIT_SHA, GITFLIC_RELEASE_TOKEN.
 #   GITFLIC_RELEASE_TOKEN is required, supplied as a secret CI variable, never
 #   accepted as a CLI argument or printed. CI_JOB_TOKEN is neither used nor changed;
@@ -16,6 +18,8 @@
 #   with CI_JOB_TOKEN (500: the runner principal has no database user ID).
 #   User API authentication supports release authorship but does not bypass MIME
 #   validation. In 4.5.0 the release MIME allowlist is compiled into the server.
+#   Sending text/plain alone does not enable checksums: the server needs the
+#   release-only validator for bounded, syntax-checked SHA256SUMS / *.sha256 files.
 import argparse
 import hashlib
 import json
@@ -103,8 +107,9 @@ class Client:
 
     def upload(self, url, name, contents):
         boundary = "pgcc-" + uuid.uuid4().hex
+        media_type = "text/plain" if name == "SHA256SUMS" or name.endswith(".sha256") else "application/octet-stream"
         body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{name}\"\r\n"
-                "Content-Type: application/octet-stream\r\n\r\n").encode()
+                f"Content-Type: {media_type}\r\n\r\n").encode()
         body += contents + f"\r\n--{boundary}--\r\n".encode()
         self.request(url, body, "multipart/form-data; boundary=" + boundary)
 

@@ -41,7 +41,7 @@ jobs:
             export CI_COMMIT_TAG="$REF_NAME"
           fi
           bash tools/prx-ci-build.sh
-          (cd dist && sha256sum -c SHA256SUMS)
+          (cd dist && sha256sum -c claster-creator-*.sha256)
       - name: Keep build artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

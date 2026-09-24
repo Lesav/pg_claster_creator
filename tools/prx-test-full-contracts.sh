@@ -168,6 +168,7 @@ while read -r option variable field; do
     check "DEB-ENV-$variable" 0 env_value "$work/builder.sh" "$option" "$variable" "$field" env_value
 done <<'MAP'
 --mode PGCC_MODE MODE
+--cluster-policy PGCC_CLUSTER_POLICY CLUSTER_POLICY
 --pg-family PGCC_PG_FAMILY pg
 --pg-version PGCC_PG_VERSION pg_ver
 --cluster-name PGCC_CLUSTER_NAME cls_nm
@@ -240,6 +241,8 @@ done <<'MAP'
 --backup-dir PGCC_BACKUP_DIR backup_dir /env /cli
 --backup-type PGCC_BACKUP_TYPE BACKUP_TYPE hot cold
 --database PGCC_DATABASE DATABASE_NAME env_name cli_name
+--sql-file PGCC_SQL_FILE SQL_FILE /env.sql /cli.sql
+--if-missing PGCC_IF_MISSING SQL_IF_MISSING error skip
 --backup-before-delete PGCC_BACKUP_BEFORE_DELETE BACKUP_BEFORE_DELETE no yes
 --clear-wal PGCC_CLEAR_WAL CLEAR_WAL no yes
 --overwrite PGCC_OVERWRITE OVERWRITE_EXISTING no yes

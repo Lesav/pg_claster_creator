@@ -2,3 +2,4 @@
 /tests/
 /dist/
 /create-claster-deb-last.sh
+/tools/__pycache__

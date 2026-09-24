@@ -2,7 +2,7 @@
 
 Manage PostgreSQL clusters on Astra Linux and compatible Debian-based systems using interactive Bash menus or command-line automation. Build Debian packages that install the tools and optionally deploy a cluster, restore a backup, or initialize a database from SQL.
 
-**Version:** 2.5.6 · **Language:** English | [Русский](README_ru.md)
+**Version:** 2.5.7 · **Language:** English | [Русский](README_ru.md)
 
 The spelling `claster` is retained in project, command, and package names for compatibility. Interactive messages and `--help` output are currently in Russian; script headers and manual pages include English documentation.
 
@@ -127,11 +127,12 @@ The five `cls_*` defaults are preserved when the script saves server selection o
 | Operation | Interactive | CLI / environment |
 | --- | --- | --- |
 | Cluster information, creation, port/data changes, backup, restore, deletion | Yes | `--action` / `PGCC_ACTION`: `info`, `install`, `port`, `move-data`, `backup`, `restore`, `delete` |
-| Start/stop and rename a cluster; execute SQL on an existing database | Yes | Menu only |
+| Start/stop and rename a cluster | Yes | Menu only |
+| Execute SQL on an existing database | Yes | `--action sql`, `--sql-file` and ENV equivalents |
 | Delete an individual database | Yes | Menu only; CLI `delete` deletes a cluster |
 | Hot backup and retention through the wrapper | Backup runs without prompts | Positional target or environment target, plus options |
 | Configure a backup cron job | Yes | `--cron` / `PGCC_CRON=yes` opens the scheduling dialog |
-| Build DEB modes 1–5 | Yes | Use `--mode` and `--non-interactive` |
+| Build DEB modes 1–6 | Yes | Use `--mode` and `--non-interactive` |
 
 Selecting `--action` or `PGCC_ACTION` disables menus and confirmations. Missing required parameters cause an error; use explicit targets and review destructive options before automation.
 
@@ -158,7 +159,7 @@ sudo bash ./create-claster.sh --config /etc/pgcc/site.config \
 
 `--data-root /DATA` uses `/DATA/pg_N/CLUSTER` for creation or relocation. Non-interactive installation selects the next free port when the requested port is occupied and reports the actual port; do not assume the requested port was retained.
 
-To execute SQL, open **Edit → Execute SQL** (`Изменить → Выполнить SQL`), select a running cluster and database, then choose a numbered `.sql` file or enter its path. Relative paths are searched from the invocation directory, then the backup directory. Only `y/Y` confirms execution. SQL runs as `postgres` with `psql -X` and `ON_ERROR_STOP`; this does not make an arbitrary script transactional. There is no `--action sql` or `PGCC_SQL_FILE` input in `create-claster.sh`.
+To execute SQL, open **Edit → Execute SQL** (`Изменить → Выполнить SQL`), select a running cluster and database, then choose a numbered `.sql` file or enter its path. Relative paths are searched from the invocation directory, then the backup directory. Only `y/Y` confirms execution. SQL runs as `postgres` with `psql -X` and `ON_ERROR_STOP`; this does not make an arbitrary script transactional. CLI: `--action sql --pg-version 18 --cluster-name subsys --database asvd --sql-file ./check.sql`. ENV: `PGCC_ACTION=sql`, `PGCC_SQL_FILE`, `PGCC_DATABASE` and target variables. `--if-missing error|skip` / `PGCC_IF_MISSING` defaults to `error`; `skip` returns 0 only for a confirmed absent target. No server is installed or started.
 
 ### Backup retention and scheduling
 
@@ -183,12 +184,12 @@ bash ./create-claster-deb.sh --config ./.new-claster.config \
   --mode 1 --non-interactive
 ```
 
-The output is `dist/claster-creator-2.5.6.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI and GitHub Actions check and build the package, retain it as a job artifact, and publish DEB/checksum attachments for matching `vX.Y.Z` tags. GitHub Actions uses a hosted Ubuntu runner and the automatic job token. See [CI and release builds](CI.md) for requirements, release guards and verification scope.
+The output is `dist/claster-creator-2.5.7.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI and GitHub Actions check and build the package, retain it as a job artifact, and publish DEB/checksum attachments for matching `vX.Y.Z` tags. GitHub Actions uses a hosted Ubuntu runner and the automatic job token. See [CI and release builds](CI.md) for requirements, release guards and verification scope.
 
 Install this scripts-only package on a host with the required repositories configured:
 
 ```bash
-sudo apt install ./dist/claster-creator-2.5.6.deb
+sudo apt install ./dist/claster-creator-2.5.7.deb
 ```
 
 | Mode | Action when the package is installed |
@@ -198,14 +199,19 @@ sudo apt install ./dist/claster-creator-2.5.6.deb
 | 3 | Install the tools and restore an embedded cold cluster backup. |
 | 4 | Install the tools, create a cluster, and restore an embedded hot database dump. |
 | 5 | Install the tools, create a cluster/database, and execute an embedded SQL file. |
+| 6 | Install the tools and execute SQL on an existing database; missing targets are skipped with a warning. |
 
-Without a mode, the builder opens its menu. Modes 2–5 prompt by default; use `--non-interactive` for automation. Modes 3/4 require `--backup-file` of the matching type; mode 4 also requires `--database`. Mode 5 requires `--sql-file` / `PGCC_SQL_FILE` and `--database` / `PGCC_DATABASE`. Interactive file lists filter cold/hot backups by mode and offer `.sql` selection for mode 5. SQL must be self-contained: included external files are not packaged.
+Without a mode, the builder opens its menu. Modes 2–6 prompt by default; use `--non-interactive` for automation. Modes 3/4 require `--backup-file` of the matching type; mode 4 also requires `--database`. Modes 5/6 require `--sql-file` / `PGCC_SQL_FILE` and `--database` / `PGCC_DATABASE`. Interactive file lists filter cold/hot backups by mode and offer `.sql` selection for modes 5/6. SQL must be self-contained: included external files are not packaged.
 
 For automatic Postgres Pro selection in modes 4/5, `--pg-version` is a **minimum major**, with ordered contrib alternatives preferring 18, then 17, down to that minimum. Use `--package` to pin the server package name. Cold mode preserves the server package recorded in backup metadata.
 
 `--output-dir` changes the destination; `--force` permits replacing an existing output DEB. Temporary build trees are cleaned on exit; a `tmp/` parent is removed only if this run created it and it is empty. Both DEB archives use gzip for older Astra `dpkg` compatibility.
 
 Every mode installs only these available root-level Markdown documents into `/usr/local/share/pg_claster_creator/`: `README.md`, `README_ru.md`, `CHANGELOG.md`, `CHANGELOG_ru.md`, and the latest `TEST-X.Y.Z-journal-passed.md` by numeric version. `CI.md`, `TEST.md`, other Markdown files, subdirectories such as `tests/`, and symbolic links are excluded. Command links are installed for the main and backup scripts in `/usr/local/bin`; invoke the installed builder by its full path. English and Russian manual pages are installed under `/usr/share/man/`.
+
+Modes 4/5 offer Create or Replace before the existing wizard. CLI: `--cluster-policy create|replace`; ENV: `PGCC_CLUSTER_POLICY` (default `create`). Replace stops and deletes only the exact target major/name **without backup**, then creates it and restores the hot dump (4) or applies SQL (5). Package names include `re-<cluster>-<database>`. A completed installation is not repeated; a failed deletion prevents creation. Pin `--package` when an exact Postgres Pro major is required.
+
+Mode 6 installs scripts and executes a trusted SQL file on an existing major/name/database. Use `--pg-version`, `--cluster-name`, `--database`, `--sql-file` (or their PGCC equivalents). No server dependency is added, no cluster/database is created or started. Missing cluster/database: warning and exit 0, without a completion marker. Connection, permission and SQL errors remain failures. Successful SQL is not repeated; interrupted SQL requires manual review of the database and `.sql-started` marker. Both installation force flags are rejected in mode 6.
 
 Deployment modes use progress/completion markers in `/var/lib/claster-creator`. Review the builder manual before retrying failed deployments. In particular, `CLASTER_FORCE_INSTALL=1` at package installation deletes the target cluster **without a backup** before redeployment; `CLASTER_FORCE_DB_INSTALL=1` overwrites only the target database and is supported in mode 4 only. The flags are mutually exclusive and are not build-time options. Failed mode-5 SQL is not replayed automatically because partial changes may already exist.
 

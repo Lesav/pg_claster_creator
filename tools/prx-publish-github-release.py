@@ -3,7 +3,7 @@
 # Purpose: Publish GitHub release assets with immutable-tag and checksum guards.
 # Usage: python3 tools/prx-publish-github-release.py --dist dist --notes CHANGELOG.md
 # Args: --repo OWNER/REPO, --tag vX.Y.Z, --commit SHA override GITHUB_* defaults.
-# Output: Release DEB and SHA256SUMS; downloads are SHA-256 verified.
+# Output: Release DEB and claster-creator-VERSION.sha256; downloads are SHA-256 verified.
 # Environment: GH_TOKEN is required; GITHUB_REPOSITORY, GITHUB_REF_NAME, GITHUB_SHA.
 # Example: GH_TOKEN=... python3 tools/prx-publish-github-release.py --dist dist
 # Safety: Use the job's contents:write token, never log it. No tag creation/moves,
@@ -72,14 +72,14 @@ def prepare(args):
     if not re.fullmatch(r'[0-9a-fA-F]{40}', args.commit or ''):
         raise ValueError('Expected full commit SHA')
     paths = [Path(args.dist) / f'claster-creator-{args.tag[1:]}.deb',
-             Path(args.dist) / 'SHA256SUMS']
+             Path(args.dist) / f'claster-creator-{args.tag[1:]}.sha256']
     for path in paths:
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 128 * 1024 * 1024:
             raise ValueError('Expected regular release file, at most 128 MiB')
     files = {path.name: (path, path.read_bytes()) for path in paths}
     expected = f'{digest(files[paths[0].name][1])}  {paths[0].name}\n'.encode()
-    if files['SHA256SUMS'][1] != expected:
-        raise ValueError('SHA256SUMS does not match this DEB')
+    if files[paths[1].name][1] != expected:
+        raise ValueError('Versioned .sha256 file does not match this DEB')
     # Reuse the existing version-specific changelog extraction, not a second parser.
     notes = runpy.run_path(str(Path(__file__).with_name('prx-publish-gitflic-release.py')))
     return files, notes['release_notes'](args.notes, args.tag[1:])

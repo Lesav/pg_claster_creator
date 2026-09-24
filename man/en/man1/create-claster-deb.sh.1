@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-14" "pg_claster_creator 2.5.6" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-24" "pg_claster_creator 2.5.7" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -116,6 +116,10 @@ uses the exact physical-backup version: its package depends on
 .B postgresql-common
 and the exact server package recorded in backup metadata, without an
 automatically added contrib package.
+.SH EXISTING SQL AND REPLACEMENT
+Modes 4/5 offer Create or Replace before the existing wizard. CLI: --cluster-policy create|replace; ENV: PGCC_CLUSTER_POLICY (default create). Replace stops and deletes only the exact target major/name without backup, then creates it and restores the hot dump (4) or applies SQL (5). Package names include re-<cluster>-<database>. A completed installation is not repeated; a failed deletion prevents creation. Pin --package when an exact Postgres Pro major is required.
+
+Mode 6 installs scripts and executes a trusted SQL file on an existing major/name/database. Use --pg-version, --cluster-name, --database, --sql-file (or their PGCC equivalents). No server dependency is added, no cluster/database is created or started. Missing cluster/database: warning and exit 0, without a completion marker. Connection, permission and SQL errors remain failures. Successful SQL is not repeated; interrupted SQL requires manual review of the database and .sql-started marker. Both installation force flags are rejected in mode 6.
 .SH OPTIONS
 .TP
 .BI --config " FILE"
@@ -133,7 +137,11 @@ Print complete usage information and exit.
 Print the builder version and exit.
 .TP
 .BI "-m, --mode " MODE
-Select mode 1, 2, 3, 4, or 5.
+Select mode 1, 2, 3, 4, 5, or 6.
+.TP
+.BI "--cluster-policy " create|replace
+Create the target cluster (default), or replace the exact target without a
+backup. Replacement is accepted only in modes 4 and 5.
 .TP
 .BI "--pg-family " FAMILY
 Select postgresql, postgrespro-ent, tantor-free, tantor-se (Special Edition), or tantor-be (Basic Edition).
@@ -169,17 +177,17 @@ it does not exist.
 Select a cold backup for mode 3 or a hot backup for mode 4.
 .TP
 .BI "--sql-file " FILE
-Embed a readable .sql file for mode 5; the database must not be a system database.
+Embed a readable .sql file for mode 5/6; mode 5 rejects system databases.
 .TP
 .BI "--backup-dir " DIRECTORY
 Select the directory used by interactive backup selection.
 .TP
 .BI "--database " NAME
-Set the target database for modes 4 and 5.
+Set the target database for modes 4, 5 and 6.
 .TP
 .BI "--depends " PACKAGES
 Add comma-separated Debian package dependencies. The option may be repeated and
-is accepted only in modes 2 through 5. With automatic PostgreSQL Pro selection,
+is accepted only in modes 2 through 6. With automatic PostgreSQL Pro selection,
 server packages already covered by eligible contrib alternatives are omitted.
 .TP
 .BI "--output-dir " DIRECTORY
@@ -187,7 +195,7 @@ Select the package destination. The default is
 .IR dist .
 .TP
 .BR -i , " --interactive"
-Explicitly enable the mode 2 through 5 configuration dialog.
+Explicitly enable the mode 2 through 6 configuration dialog.
 .TP
 .BR -n , " --non-interactive"
 Disable prompts and require complete arguments.
@@ -216,7 +224,8 @@ configured database password, so access to the home directory must be restricted
 .SH BUILD ENVIRONMENT
 CLI > nonempty ENV > configuration/defaults. Empty ENV is unset.
 .nf
---config: PGCC_CFG; --mode: PGCC_MODE; --pg-family: PGCC_PG_FAMILY;
+--config: PGCC_CFG; --mode: PGCC_MODE; --cluster-policy: PGCC_CLUSTER_POLICY;
+--pg-family: PGCC_PG_FAMILY;
 --pg-version: PGCC_PG_VERSION; --cluster-name: PGCC_CLUSTER_NAME;
 --port: PGCC_CLUSTER_PORT; --package: PGCC_PACKAGE; --schema: PGCC_SCHEMA;
 --user: PGCC_DB_USER; --password: PGCC_DB_PASSWORD; --data-root: PGCC_DATA_ROOT;

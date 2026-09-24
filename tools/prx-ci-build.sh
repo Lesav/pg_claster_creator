@@ -3,7 +3,8 @@
 # Purpose: Run non-destructive syntax and scripts-only DEB checks in CI or locally.
 # Usage: bash tools/prx-ci-build.sh [REPO]
 # Args: REPO defaults to the parent of this helper after installation in tools.
-# Output: dist/claster-creator-VERSION.deb, SHA256SUMS, package-contents.txt, build.log.
+# Output: dist/claster-creator-VERSION.deb, claster-creator-VERSION.sha256,
+#   SHA256SUMS (compatibility copy), package-contents.txt, build.log.
 # Environment: CI_COMMIT_TAG, when set, must equal vVERSION. No host PGCC_* is used.
 # Example: bash tools/prx-ci-build.sh "$PWD"  # never installs the package
 set -Eeuo pipefail
@@ -30,7 +31,9 @@ env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 \
 package="dist/claster-creator-$version.deb"
 [[ $(dpkg-deb -f "$package" Package) == claster-creator ]]
 dpkg-deb --contents "$package" > dist/package-contents.txt
-(cd dist && sha256sum "claster-creator-$version.deb" > SHA256SUMS)
+(cd dist && sha256sum "claster-creator-$version.deb" > "claster-creator-$version.sha256" &&
+    cp -- "claster-creator-$version.sha256" SHA256SUMS &&
+    sha256sum -c "claster-creator-$version.sha256")
 git check-ignore -q "$package"
 [[ -z $(git ls-files -- dist) ]]
 echo "PASS: $package is verified and remains outside Git"

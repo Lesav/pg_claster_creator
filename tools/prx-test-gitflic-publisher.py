@@ -170,6 +170,22 @@ class Tests(unittest.TestCase):
         request = client.opener.open.call_args[0][0]
         self.assertEqual(request.get_header('Authorization'), 'token user-test-secret')
 
+    def test_multipart_checksum_content_type_and_bytes(self):
+        client = publisher.Client('user-test-secret')
+        contents = b'a' * 64 + b'  claster-creator-2.5.6.deb\n'
+        for name, mime in [('claster-creator-2.5.6.sha256', 'text/plain'),
+                           ('SHA256SUMS', 'text/plain'),
+                           ('package.deb', 'application/octet-stream'),
+                           ('note.txt', 'application/octet-stream')]:
+            with self.subTest(name=name), patch.object(client, 'request') as request:
+                client.upload('http://example.invalid/file', name, contents)
+                url, body, content_type = request.call_args[0]
+                self.assertTrue(content_type.startswith('multipart/form-data; boundary='))
+                boundary = content_type.split('boundary=', 1)[1]
+                expected = (f'--{boundary}\r\nContent-Disposition: form-data; name="files"; '
+                            f'filename="{name}"\r\nContent-Type: {mime}\r\n\r\n').encode()
+                self.assertEqual(body, expected + contents + f'\r\n--{boundary}--\r\n'.encode())
+
     def test_help_documents_secret_environment_without_values(self):
         output = io.StringIO()
         with patch.dict(publisher.os.environ, {'GITFLIC_RELEASE_TOKEN': 'user-test-secret'}, clear=True), \

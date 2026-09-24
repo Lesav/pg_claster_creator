@@ -4,6 +4,12 @@ All significant project changes are recorded in this file.
 
 [Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
 
+## 2.5.7 — 2026-09-24
+
+- Added DEB mode 6: SQL on an existing cluster/database; missing targets warn and succeed without creating anything. Modes 4/5 offer explicit create/replace policy (CLI/ENV), with `re-<cluster>-<database>` package names for replacement. Added main-script SQL CLI/ENV, updated manuals and test plan; failed SQL is not automatically replayed.
+
+- Release attachments now use `claster-creator-X.Y.Z.sha256` on GitHub and GitFlic. The CI build retains `SHA256SUMS` only as an artifact compatibility copy. GitFlic sends checksum files as `text/plain`; GitFlic 4.5.0 additionally needs the separate server-side checksum-name validation patch. Existing release assets and tags are unchanged.
+
 ## 2.5.6 — 2026-09-14
 
 - Updated create-claster-deb.sh: the package includes the latest passed test journal and the CHANGELOG and README documents.
