@@ -51,10 +51,11 @@ mkdir "$work/backups/directory.sql"
     done
     MODE=5; BACKUP_FILE=""; SQL_FILE=""
     select_sql_interactive <<<1 >"$logs/sql-list.log"
-    [[ "$SQL_FILE" == "$work/backups/schema file.sql" ]]
+    [[ "$SQL_FILE" == "$work/backups/link.sql" ]]
     ! grep -q 'broken.sql\|directory.sql' "$logs/sql-list.log"
     SQL_FILE=""; select_sql_interactive <<<"$work/backups/schema file.sql"
     cd "$work"; SQL_FILE=""; select_sql_interactive <<<'backups/schema file.sql'
+    [[ "$SQL_FILE" == 'backups/schema file.sql' ]]
     SQL_FILE=""; select_sql_interactive <<<'schema file.sql'
     BACKUP_DIR="$work/absent"; SQL_FILE=""; select_sql_interactive <<<"$work/backups/schema file.sql"
     BACKUP_DIR="$work/backups"; SQL_FILE=""; ! select_sql_interactive <<<0
@@ -80,6 +81,11 @@ mkdir "$work/backups/directory.sql"
     grep -F -- '--sql-file' "$work/create-claster-deb-last.sh"
     grep -F -- '--database qa_db' "$work/create-claster-deb-last.sh"
     grep -F -- "--config $(printf '%q' "$CONFIG_FILE")" "$work/create-claster-deb-last.sh"
+    SQL_FILE='backups/schema file.sql'; SQL_PLAN_SOURCE=""; prepare_sql_files
+    write_last_build_script
+    grep -F -- "--sql-file $(printf '%q' 'backups/schema file.sql')" "$work/create-claster-deb-last.sh"
+    SQL_FILE="$work/backups/schema file.sql"; SQL_PLAN_SOURCE=""; prepare_sql_files
+    write_last_build_script
     OUTPUT_DIR="$work/out"; build_package
     deb="$OUTPUT_DIR/$(package_basename).deb"
     [[ "$deb" == *-cre-sql-qa-qa_db.deb ]]
@@ -111,7 +117,8 @@ mkdir "$work/backups/directory.sql"
 )
 # Remap only the generated deployment's own paths; all commands below are fixtures.
 payload="$work/payload/usr/local/share/pg_claster_creator"
-sed "s|readonly creator_dir=.*|readonly creator_dir=\"$payload\"|; s|readonly state_dir=.*|readonly state_dir=\"$work/state\"|" "$work/control/postinst" >"$work/postinst"
+mkdir "$work/install-logs"
+sed "s|readonly creator_dir=.*|readonly creator_dir=\"$payload\"|; s|readonly state_dir=.*|readonly state_dir=\"$work/state\"|; s|readonly install_log_dir=.*|readonly install_log_dir=\"$work/install-logs\"|" "$work/control/postinst" >"$work/postinst"
 cat >"$payload/create-claster.sh" <<'SH'
 #!/usr/bin/env bash
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
@@ -147,7 +154,10 @@ else
     [[ "$*" == *'-X --no-password'* && "$*" == *'--set=ON_ERROR_STOP=1 --file=-'* ]] || exit 1
     cmp - "$QA_SQL_WORK/backups/schema file.sql" || exit 1
     echo SQL >>"$QA_SQL_WORK/events"
-    [[ ! -f "$QA_SQL_WORK/fail-sql" ]] || exit 3
+    [[ ! -f "$QA_SQL_WORK/fail-sql" ]] || {
+        printf 'ERROR: function public.get_diff_interval(timestamp without time zone) does not exist\n' >&2
+        exit 3
+    }
 fi
 SH
 chmod +x "$work/bin/"* "$payload/create-claster.sh"
@@ -170,6 +180,24 @@ CLASTER_FORCE_INSTALL=1 bash "$work/postinst" configure
 rm "$work/cluster" "$work/db"
 bash "$work/postinst" configure
 [[ "$(grep -c '^SQL$' "$work/events")" == 4 ]]
+sed -i \
+    -e 's/^cluster_policy=create$/cluster_policy=replace/' \
+    -e 's/-cre-sql-/-rst-sql-/' \
+    "$payload/.package-install.env"
+rm -f "$work/state/"*.done "$work/state/"*.sql-started
+touch "$work/fail-sql"
+if CLASTER_FORCE_INSTALL=1 bash "$work/postinst" configure >"$work/rst-sql-terminal.log" 2>&1; then exit 1; fi
+grep -F 'ERROR: function public.get_diff_interval(timestamp without time zone) does not exist' "$work/rst-sql-terminal.log"
+rst_log="$(sed -n 's/^ОШИБКА: установка SQL-пакета завершилась с кодом [0-9][0-9]*\. Журнал: //p' "$work/rst-sql-terminal.log" | tail -n 1)"
+[[ "$rst_log" =~ /claster-creator-[0-9]+\.[0-9]+\.[0-9]+-tantor-be-18-rst-sql-qa-qa_db-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}\.log$ ]]
+[[ -f "$rst_log" && "$(stat -c '%a' "$rst_log")" == 600 ]]
+grep -F 'ERROR: function public.get_diff_interval(timestamp without time zone) does not exist' "$rst_log"
+grep -F "Журнал: $rst_log" "$work/rst-sql-terminal.log"
+rm "$work/fail-sql"
+sed -i \
+    -e 's/^cluster_policy=replace$/cluster_policy=create/' \
+    -e 's/-rst-sql-/-cre-sql-/' \
+    "$payload/.package-install.env"
 printf 'PASS postinst fresh/repeat/error/no-replay/force/stale markers; no real clusters changed\n'
 if [[ -n "$pg_home" ]]; then
     # A raw disposable server is never registered in /etc or managed by systemd.

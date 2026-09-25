@@ -4,6 +4,23 @@ All significant project changes are recorded in this file.
 
 [Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
 
+## 2.6.1 — 2026-09-25
+
+- Patch release for SQL-package installation logs and SQL-tree packaging with
+  directory links and spaces in path names.
+- SQL packages mirror installation and `psql` output to a private
+  `/tmp/<complete-DEB-basename>-YYYY-MM-DD-hhmmss.log` while keeping
+  the original error visible in the terminal; failures print the status and path.
+- The builder preserves the logical `--sql-file` spelling in repeat scripts and
+  traverses SQL-tree directory links (including Windows Junctions through WSL)
+  under the link name. SQL is embedded as regular files; link loops are rejected.
+  Spaces in internal DEB paths are encoded as `%20` without changing the SQL.
+- Version 2.6.1 completed an eight-way destructive WSL run: all exit codes were
+  zero, with 3808 PASS rows and 120 expected-return-code checks. SQL single/tree
+  order, package restoration and cleanup passed. The journal records 27/61 fully
+  covered IDs and 34 partial IDs; its requested `passed` suffix does not claim
+  that the explicitly listed skipped variants were executed.
+
 ## 2.6.0 — 2026-09-24
 
 - Minor version bump for SQL directory trees, cold create/replace policy and the

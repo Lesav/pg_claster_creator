@@ -93,13 +93,18 @@
 #   confirm or change supported target values before the package is created.
 #   Modes 5/6 list .sql files in the backup directory and accept relative/absolute
 #   paths to a file or directory tree, including when the list is empty.
-#   Regular *.sql files are ordered by LC_ALL=C relative paths; nested symlinks
-#   are skipped. A frozen manifest preserves the confirmed order in the package.
+#   Regular *.sql files are ordered by LC_ALL=C relative paths. Directory links
+#   are traversed under their logical names; linked SQL content is copied into
+#   the package as regular files. Link loops fail the build. A frozen manifest
+#   preserves the confirmed order in the package.
 #   Each file runs in its own psql session; stop at the first failure, no rollback.
-#   Percent/CR/LF characters in packaged paths are escaped as %25/%0D/%0A.
+#   Percent/space/CR/LF in packaged paths are escaped as %25/%20/%0D/%0A.
 #   SQL is trusted administrator input:
 #   psql runs as postgres with ON_ERROR_STOP; a failed/interrupted execution is
 #   not replayed automatically. CLASTER_FORCE_INSTALL resets the whole cluster.
+#   SQL-package postinst output is mirrored to a private /tmp log whose prefix
+#   is the complete installed DEB basename (without .deb), followed by
+#   -YYYY-MM-DD-hhmmss.log. psql errors remain visible in the terminal.
 #   In modes 4 and 5, an implicit postgrespro-ent package treats --pg-version as the
 #   minimum target major. The generated contrib alternatives prefer PostgreSQL
 #   Pro 18, then 17, down to that minimum; contrib pulls the matching server.
@@ -147,7 +152,7 @@
 set -Eeuo pipefail
 
 readonly SCRIPT_NAME="create-claster-deb.sh"
-readonly SCRIPT_VERSION="2.6.0"
+readonly SCRIPT_VERSION="2.6.1"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
 readonly INSTALLED_CONFIG_FILE="/usr/local/shared/pg_claster_creator/.new-claster.config"
@@ -311,10 +316,17 @@ CLASTER_FORCE_INSTALL и CLASTER_FORCE_DB_INSTALL действуют при ус
 В режимах 5/6 выберите номер .sql из каталога бэкапов или путь к файлу/каталогу:
 относительно текущего каталога, затем каталога бэкапов, либо абсолютный путь.
 SQL включается в DEB с правами 0600 и выполняется от postgres с ON_ERROR_STOP.
-Каталог: рекурсивно обычные *.sql, без внутренних ссылок, порядок LC_ALL=C
-относительных путей. Список фиксируется перед подтверждением; каждый файл —
-отдельный сеанс. Первая ошибка останавливает набор без отката предыдущих файлов.
-Символы %, CR и LF в путях внутри DEB кодируются как %25, %0D и %0A.
+Каталог: рекурсивно обычные *.sql, порядок LC_ALL=C относительных путей.
+Ссылки на каталоги обходятся под их логическими именами, а найденный SQL
+копируется в DEB обычными файлами; цикл ссылок прерывает сборку. Исходный текст
+пути --sql-file не канонизируется. Список фиксируется перед подтверждением;
+каждый файл — отдельный сеанс. Первая ошибка останавливает набор без отката.
+Вывод установки SQL-пакета и psql одновременно показывается в терминале и
+сохраняется с правами 0600 в /tmp/<полное-имя-DEB-без-.deb>-ДАТА-ВРЕМЯ.log;
+при ошибке путь к журналу выводится перед завершением postinst. Операция
+cre/rst и режим SQL берутся непосредственно из имени устанавливаемого пакета.
+Символы %, пробел, CR и LF в путях внутри DEB кодируются как
+%25, %20, %0D и %0A.
 Используйте только доверенные SQL-файлы; внешние include-файлы
 не встраиваются. Ошибка может оставить частичные изменения; автоматического
 повтора SQL нет. CLASTER_FORCE_INSTALL=1 пересоздаёт весь кластер без бэкапа.
@@ -685,10 +697,16 @@ select_backup_interactive() {
 }
 
 resolve_sql_file() {
-    local requested="$1" resolved
-    resolved="$(resolve_backup_file "${requested}")" || return 1
-    [[ -d "${resolved}" || ( -f "${resolved}" && -r "${resolved}" && "${resolved}" == *.sql ) ]] || return 1
-    printf '%s' "${resolved}"
+    local requested="$1" candidate
+    if [[ "${requested}" == /* || -f "${requested}" || -d "${requested}" ]]; then
+        candidate="${requested}"
+    else
+        candidate="${BACKUP_DIR%/}/${requested}"
+    fi
+    [[ -d "${candidate}" || ( -f "${candidate}" && -r "${candidate}" && "${candidate}" == *.sql ) ]] || return 1
+    # Keep the operator's logical spelling (including ./ and directory links)
+    # for the repeat script and for relative paths inside the packaged tree.
+    printf '%s' "${candidate}"
 }
 
 # Freeze the confirmed list, with NUL delimiters for arbitrary filenames.
@@ -699,7 +717,7 @@ prepare_sql_files() {
         SQL_PLAN_SOURCE=""
         if [[ -d "${SQL_FILE}" ]]; then
             manifest="$(mktemp)" || return 1
-            if ! (set -o pipefail; find "${SQL_FILE}" -type f -name '*.sql' -print0 | LC_ALL=C sort -z) >"${manifest}"; then
+            if ! (set -o pipefail; find -L "${SQL_FILE}" -type f ! -xtype l -name '*.sql' -print0 | LC_ALL=C sort -z) >"${manifest}"; then
                 rm -f -- "${manifest}"; return 1
             fi
             mapfile -d '' -t SQL_FILES <"${manifest}"
@@ -710,7 +728,7 @@ prepare_sql_files() {
     fi
     ((${#SQL_FILES[@]})) || return 1
     for file in "${SQL_FILES[@]}"; do
-        [[ -f "${file}" && -r "${file}" && ! -L "${file}" ]] || return 1
+        [[ -f "${file}" && -r "${file}" ]] || return 1
     done
     SQL_PLAN_SOURCE="${SQL_FILE}"
 }
@@ -1549,9 +1567,10 @@ create_install_plan() {
             : >"${payload_dir}/package-data/sql-files.list"
             for file in "${SQL_FILES[@]}"; do
                 relative="${file#"${SQL_FILE%/}/"}"
-                # dpkg rejects newlines in archive paths. Escape percent first
-                # to keep this mapping collision-free and the source order intact.
+                # Use shell-safe archive paths and escape percent first to keep
+                # the mapping collision-free while preserving the source order.
                 relative="${relative//%/%25}"
+                relative="${relative// /%20}"
                 relative="${relative//$'\n'/%0A}"
                 relative="${relative//$'\r'/%0D}"
                 install -D -m 0600 -- "${file}" "${payload_dir}/package-data/${sql_name}/${relative}"
@@ -1602,6 +1621,36 @@ readonly plan_file="${creator_dir}/.package-install.env"
 
 # shellcheck disable=SC1090
 source "${plan_file}"
+
+# Preserve the complete SQL deployment transcript without hiding psql errors
+# from dpkg's terminal. The root-only log can contain SQL notices and object names.
+readonly install_log_dir="/tmp"
+sql_install_log=""
+if [[ "${mode}" == 5 || "${mode}" == 6 ]]; then
+    # dpkg serializes package operations, but a rapid manual retry can have the
+    # same second timestamp. Wait for the next second instead of overwriting an
+    # existing log. noclobber also prevents following a pre-created /tmp symlink.
+    for log_attempt in 1 2 3 4 5; do
+        sql_install_log="${install_log_dir}/${plan_id}-$(date '+%Y-%m-%d-%H%M%S').log"
+        if (umask 077; set -o noclobber; : >"${sql_install_log}") 2>/dev/null; then
+            break
+        fi
+        if [[ -e "${sql_install_log}" || -L "${sql_install_log}" ]]; then
+            sql_install_log=""
+            sleep 1
+            continue
+        fi
+        printf 'ОШИБКА: не удалось создать журнал установки SQL: %s\n' "${sql_install_log}" >&2
+        exit 1
+    done
+    [[ -n "${sql_install_log}" ]] || {
+        printf 'ОШИБКА: не удалось выбрать уникальное имя журнала установки SQL в %s.\n' "${install_log_dir}" >&2
+        exit 1
+    }
+    exec > >(tee -a -- "${sql_install_log}") 2>&1
+    trap 'result=$?; trap - EXIT; if ((result == 0)); then printf "Журнал установки и выполнения SQL: %s\n" "${sql_install_log}"; else printf "ОШИБКА: установка SQL-пакета завершилась с кодом %s. Журнал: %s\n" "${result}" "${sql_install_log}" >&2; fi; exit "${result}"' EXIT
+    printf 'Журнал установки и выполнения SQL: %s\n' "${sql_install_log}"
+fi
 
 postgrespro_package_installed() {
     local version="$1"

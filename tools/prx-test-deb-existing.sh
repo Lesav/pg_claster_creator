@@ -62,7 +62,8 @@ for mode in 3 4 5 6; do
         bash "$work/create-claster-deb-last.sh"
     )
     payload="$work/payload-$mode/usr/local/share/pg_claster_creator"
-    sed "s|readonly creator_dir=.*|readonly creator_dir=\"$payload\"|; s|readonly state_dir=.*|readonly state_dir=\"$work/state-$mode\"|" "$work/control-$mode/postinst" >"$work/postinst-$mode"
+    mkdir "$work/install-logs-$mode"
+    sed "s|readonly creator_dir=.*|readonly creator_dir=\"$payload\"|; s|readonly state_dir=.*|readonly state_dir=\"$work/state-$mode\"|; s|readonly install_log_dir=.*|readonly install_log_dir=\"$work/install-logs-$mode\"|" "$work/control-$mode/postinst" >"$work/postinst-$mode"
     cat >"$payload/create-claster.sh" <<'SH'
 #!/usr/bin/env bash
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
@@ -236,7 +237,7 @@ for mode in 5 6; do
         select_config
         BACKUP_DIR="$work"
         select_sql_interactive <<<'sql tree'
-        [[ ${#SQL_FILES[@]} == 3 ]]
+        [[ ${#SQL_FILES[@]} == 5 ]]
         print_sql_plan >"$logs/tree-plan-$mode.log"
         # Files appearing after confirmation must not silently enter the package.
         printf 'not-confirmed\n' >"$work/sql tree/99.sql"
@@ -246,11 +247,19 @@ for mode in 5 6; do
         dpkg-deb -e "$OUTPUT_DIR/$(package_basename).deb" "$work/tree-control-$mode"
         [[ ! -e "$work/tree-payload-$mode/usr/local/share/pg_claster_creator/package-data/sql-tree/99.sql" ]]
         [[ "$(stat -c %a "$work/tree-payload-$mode/usr/local/share/pg_claster_creator/package-data/sql-tree/01.sql")" == 600 ]]
+        [[ -f "$work/tree-payload-$mode/usr/local/share/pg_claster_creator/package-data/sql-tree/02%20nested/01.sql" ]]
+        [[ ! -e "$work/tree-payload-$mode/usr/local/share/pg_claster_creator/package-data/sql-tree/02 nested" ]]
+        tr '\0' '\n' <"$work/tree-payload-$mode/usr/local/share/pg_claster_creator/package-data/sql-files.list" | grep -Fx '02%20nested/01.sql'
+        [[ -f "$work/tree-payload-$mode/usr/local/share/pg_claster_creator/package-data/sql-tree/link-dir/01.sql" ]]
+        [[ ! -L "$work/tree-payload-$mode/usr/local/share/pg_claster_creator/package-data/sql-tree/link-dir/01.sql" ]]
+        cmp "$work/sql tree/02 nested/01.sql" "$work/tree-payload-$mode/usr/local/share/pg_claster_creator/package-data/sql-tree/link-dir/01.sql"
+        [[ ! -e "$work/tree-payload-$mode/usr/local/share/pg_claster_creator/package-data/sql-tree/link.sql" ]]
         rm "$work/sql tree/99.sql"
     )
     payload="$work/tree-payload-$mode/usr/local/share/pg_claster_creator"
     cp "$work/payload-5/usr/local/share/pg_claster_creator/create-claster.sh" "$payload/create-claster.sh"
-    sed "s|readonly creator_dir=.*|readonly creator_dir=\"$payload\"|; s|readonly state_dir=.*|readonly state_dir=\"$work/tree-state-$mode\"|" "$work/tree-control-$mode/postinst" >"$work/tree-postinst-$mode"
+    mkdir "$work/tree-install-logs-$mode"
+    sed "s|readonly creator_dir=.*|readonly creator_dir=\"$payload\"|; s|readonly state_dir=.*|readonly state_dir=\"$work/tree-state-$mode\"|; s|readonly install_log_dir=.*|readonly install_log_dir=\"$work/tree-install-logs-$mode\"|" "$work/tree-control-$mode/postinst" >"$work/tree-postinst-$mode"
     touch "$work/cluster" "$work/db" "$work/fail-sql"
     [[ "$mode" != 5 ]] || rm "$work/cluster" "$work/db"
     : >"$work/events"
@@ -264,7 +273,7 @@ for mode in 5 6; do
     [[ "$mode" != 5 ]] || rm "$work/cluster" "$work/db"
     : >"$work/events"
     QA_TREE=1 bash "$work/tree-postinst-$mode" configure
-    [[ "$(grep '^SQL ' "$work/events")" == $'SQL first\nSQL second\nSQL third' ]]
+    [[ "$(grep '^SQL ' "$work/events")" == $'SQL first\nSQL second\nSQL third\nSQL second\nSQL third' ]]
     before="$(wc -l <"$work/events")"
     QA_TREE=1 bash "$work/tree-postinst-$mode" configure
     [[ "$(wc -l <"$work/events")" == "$before" ]]

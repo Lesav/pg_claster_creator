@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER-DEB.SH 1 "2026-09-24" "pg_claster_creator 2.6.0" "Developer Commands"
+.TH CREATE-CLASTER-DEB.SH 1 "2026-09-25" "pg_claster_creator 2.6.1" "Developer Commands"
 .SH NAME
 create-claster-deb.sh \- build claster-creator Debian packages
 .SH SYNOPSIS
@@ -120,14 +120,22 @@ automatically added contrib package.
 Modes 3/4/5 offer Create or Recreate (--cluster-policy create|replace, ENV PGCC_CLUSTER_POLICY, default create). Create skips an existing cluster with a warning and exit 0. Recreate replaces the exact major/name; an absent cluster is simply created. Cold mode 3 asks at installation time for a cold backup, a hot backup of a chosen database, or explicitly confirmed deletion without backup. Cancellation, EOF or backup failure prevents deletion; force does not bypass this prompt. A hot backup covers only the chosen database, not the whole cluster being deleted. Modes 4/5 retain replacement without backup. Completed installations do not repeat.
 
 Mode 6 installs scripts and executes a trusted SQL file on an existing major/name/database. Use --pg-version, --cluster-name, --database, --sql-file (or their PGCC equivalents). No server dependency is added, no cluster/database is created or started. Missing cluster/database: warning and exit 0, without a completion marker. Connection, permission and SQL errors remain failures. Successful SQL is not repeated; interrupted SQL requires manual review of the database and .sql-started marker. Both installation force flags are rejected in mode 6.
+.PP
+During SQL-package installation, combined postinst and psql output remains visible
+in the terminal and is also written with mode 0600 to
+/tmp/<complete-DEB-basename-without-.deb>-YYYY-MM-DD-hhmmss.log. The cre/rst
+operation and SQL mode therefore exactly match the installed package name.
+A failure prints the exit status and the exact log path.
 .SS SQL DIRECTORY TREES
 The picker, --sql-file and PGCC_SQL_FILE accept a file or directory in modes 5/6.
-Regular *.sql files are collected recursively, excluding internal symlinks,
-and sorted by relative paths with LC_ALL=C. Empty/unreadable trees are rejected.
-The confirmed list is frozen and embedded with permissions 0600. Each file uses
+Regular *.sql files are collected recursively and sorted by relative paths with
+LC_ALL=C. The original --sql-file spelling, including ./, is preserved. Directory
+links are traversed under their logical names and discovered SQL is copied as
+regular mode-0600 files; file links are omitted and a link loop fails the build.
+Empty/unreadable trees are rejected. The confirmed list is frozen. Each file uses
 a separate psql session; stop on first error, no rollback of earlier changes.
-Failed batches are not automatically replayed. Percent/CR/LF in packaged paths
-are encoded as %25/%0D/%0A because dpkg rejects newlines in filenames.
+Failed batches are not automatically replayed. Percent/space/CR/LF in packaged
+paths are encoded as %25/%20/%0D/%0A without changing SQL content or order.
 .SH OPTIONS
 .TP
 .BI --config " FILE"

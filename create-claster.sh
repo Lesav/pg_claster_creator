@@ -155,7 +155,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.6.0"
+readonly SCRIPT_VERSION="2.6.1"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"

@@ -3,3 +3,7 @@
 /dist/
 /create-claster-deb-last.sh
 /tools/__pycache__
+/sql/
+/subsys/
+/create-claster-deb-last-cre.sh
+/create-claster-deb-last-rst.sh
