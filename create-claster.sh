@@ -71,6 +71,8 @@
 #   install    Install and initialize a new cluster and application roles. In
 #              non-interactive mode, a conflicting requested port is replaced
 #              by the next free port and reported with a port-change command.
+#              Generated conf.d tuning is fixed; an available pgpro_scheduler
+#              is preloaded with automatic scheduler startup enabled.
 #   port       Change the TCP port of an existing cluster.
 #   move-data  Move a cluster data directory to a default or custom location.
 #   backup     Create a cold cluster backup or a hot database backup.
@@ -155,7 +157,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.6.1"
+readonly SCRIPT_VERSION="2.6.2"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -274,6 +276,10 @@ SQL в меню: файл или каталог с .sql (рекурсивно, �
 При неинтерактивном install занятый порт автоматически заменяется первым
 следующим свободным; предупреждение показывает фактический порт и команду
 для его последующей смены.
+Новый кластер получает conf.d/optimize-claster.conf с max_wal_size=4GB,
+min_wal_size=1GB, shared_buffers=2GB и max_worker_processes=16. Если доступный
+pgpro_scheduler включён в shared_preload_libraries, в lib_preloaded.conf также
+задаётся schedule.auto_enabled=on.
 Размеры БД и каталогов данных показываются в выровненном поле шириной девять
 символов: две цифры после точки, пробел и двухбуквенная единица измерения.
 
@@ -1578,8 +1584,35 @@ write_cluster_unit() {
     systemctl enable "${service}"
 }
 
+write_cluster_generated_config() {
+    local conf_dir="$1" auth_method="$2"
+    local lib_preloaded="" pg_cron="" scheduler_auto="" lib
+
+    mkdir -p -- "${conf_dir}/conf.d"
+    cat >"${conf_dir}/conf.d/optimize-claster.conf" <<'EOF'
+max_wal_size = 4GB
+min_wal_size = 1GB
+shared_buffers = 2GB
+max_worker_processes = 16
+EOF
+    for lib in plugin_debugger pg_stat_statements pgpro_scheduler pg_cron; do
+        if [[ -f "${PG_EXT}/${lib}.so" ]]; then
+            [[ -n "${lib_preloaded}" ]] && lib_preloaded+=", "
+            lib_preloaded+="${lib}"
+            [[ "${lib}" == pg_cron ]] && pg_cron="cron.database_name = '${cls_nm}'"
+            [[ "${lib}" == pgpro_scheduler ]] && scheduler_auto='schedule.auto_enabled = on'
+        fi
+    done
+    cat >"${conf_dir}/conf.d/lib_preloaded.conf" <<EOF
+shared_preload_libraries = '${lib_preloaded}'
+${scheduler_auto}
+${pg_cron}
+EOF
+    printf "password_encryption = '%s'\n" "${auth_method}" >"${conf_dir}/conf.d/password_encryption.conf"
+}
+
 create_cluster() {
-    local auth_method data_dir data_log conf_dir create_conf lib_preloaded="" pg_cron="" lib role password_sql
+    local auth_method data_dir data_log conf_dir create_conf role password_sql
     auth_method=md5
     ((pg_ver > 16)) && auth_method=scram-sha-256
     data_dir="${DATA_BASE}/${cls_nm}"
@@ -1621,18 +1654,7 @@ unix_socket_directories = '/tmp'
 listen_addresses = '*'
 port = ${cls_pt}
 EOF
-    for lib in plugin_debugger pg_stat_statements pgpro_scheduler pg_cron; do
-        if [[ -f "${PG_EXT}/${lib}.so" ]]; then
-            [[ -n "${lib_preloaded}" ]] && lib_preloaded+=", "
-            lib_preloaded+="${lib}"
-            [[ "${lib}" == "pg_cron" ]] && pg_cron="cron.database_name = '${cls_nm}'"
-        fi
-    done
-    cat >"${conf_dir}/conf.d/lib_preloaded.conf" <<EOF
-shared_preload_libraries = '${lib_preloaded}'
-${pg_cron}
-EOF
-    printf "password_encryption = '%s'\n" "${auth_method}" >"${conf_dir}/conf.d/password_encryption.conf"
+    write_cluster_generated_config "${conf_dir}" "${auth_method}"
     chown -R postgres:postgres "${data_dir}" "${conf_dir}"
 
     write_cluster_unit

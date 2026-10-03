@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-09-25" "pg_claster_creator 2.6.1" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-10-03" "pg_claster_creator 2.6.2" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -85,6 +85,14 @@ Create a cluster, database, schema, application roles, and systemd unit. If the
 requested port is occupied, non-interactive mode selects the next free port and
 prints a warning with a command for changing it later. Interactive mode prompts
 for another value.
+.PP
+New clusters receive
+.B conf.d/optimize-claster.conf
+with max_wal_size=4GB, min_wal_size=1GB, shared_buffers=2GB and
+max_worker_processes=16. If pgpro_scheduler is available and added to
+shared_preload_libraries,
+.B conf.d/lib_preloaded.conf
+also sets schedule.auto_enabled=on.
 .TP
 .B port
 Change the TCP port of an existing cluster.
@@ -206,7 +214,8 @@ after the action, following the familiar
 addressing style. Do not mix positional targeting with the corresponding named
 options.
 .SH BACKUPS
-Cold archives contain configuration, data, the selected log file, systemd unit,
+Cold archives contain the complete per-cluster configuration directory, data,
+the selected log file, systemd unit,
 and metadata. Hot archives contain a custom-format dump and
 .IR backup-info.env .
 Before a cold backup, the data-directory size is displayed in the same aligned

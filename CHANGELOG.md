@@ -4,6 +4,21 @@ All significant project changes are recorded in this file.
 
 [Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
 
+## 2.6.2 — 2026-10-03
+
+- Patch release for generated cluster tuning and automatic Postgres Pro
+  scheduler startup.
+- New clusters receive `conf.d/optimize-claster.conf` with 4 GB maximum WAL,
+  1 GB minimum WAL, 2 GB shared buffers, and 16 worker processes.
+- When the available `pgpro_scheduler` library is placed in
+  `shared_preload_libraries`, `conf.d/lib_preloaded.conf` also enables
+  `schedule.auto_enabled` at cluster startup.
+- Cold backups continue to archive the complete per-cluster configuration
+  directory, including both generated fragments.
+- A safe eight-way WSL run completed with all 56 automated stages and 1,072
+  contract rows passing. Destructive testing was not authorized; all 61 plan
+  IDs retain explicitly documented untested variants.
+
 ## 2.6.1 — 2026-09-25
 
 - Patch release for SQL-package installation logs and SQL-tree packaging with

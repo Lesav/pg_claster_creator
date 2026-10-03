@@ -17,6 +17,8 @@ prx-test-config-priority.sh — test config priority and save isolation with fix
 prx-test-cluster-identity.sh — test major/name cluster identity and registry failure guards
 prx-prepare-postgres-test-data.sh — populate a disposable PostgreSQL database with control objects
 prx-test-cluster-power.sh — test state-based interactive cluster start/stop
+prx-test-cluster-created-config.sh — test generated tuning/preload fragments and cold-config coverage
+prx-test-cluster-created-config-live.sh — verify generated config and cold archive on a disposable live cluster
 prx-test-cluster-rename.sh — test native-like rename, prefix paths, autostart and failure guards
 prx-test-cluster-delete.sh — test direct cluster deletion and safe refusal boundaries
 prx-test-edit-menu.sh — test main/edit menu navigation and dispatch

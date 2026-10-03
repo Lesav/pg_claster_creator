@@ -17,7 +17,7 @@ for name in create-claster.sh create-claster-backup.sh create-claster-deb.sh; do
     bash "$repo/$name" --version | grep -F "версия $version"
     bash "$repo/$name" --help >/dev/null
 done
-for helper in prx-test-cluster-delete prx-test-cluster-rename prx-test-cluster-power prx-test-edit-menu prx-test-tantor-editions prx-test-deb-tmp-cleanup prx-test-config-priority; do
+for helper in prx-test-cluster-delete prx-test-cluster-rename prx-test-cluster-power prx-test-cluster-created-config prx-test-edit-menu prx-test-tantor-editions prx-test-deb-tmp-cleanup prx-test-config-priority; do
     printf '\nCHECK %s\n' "$helper"
     timeout -k 5 120 bash "$repo/tools/$helper.sh" "$repo"
 done
