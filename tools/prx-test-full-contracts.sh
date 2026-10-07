@@ -88,6 +88,45 @@ display_sizes() {
         [[ "${#label}" -le 9 && "$label" =~ ^[0-9]+[.][0-9]{2}\ [A-Z][a-z]$ && "$label" != 1000.00* ]]
     done
 }
+restore_display_sizes() {
+    source "$repo/create-claster.sh"
+    trap - EXIT
+    local directory="$work/restore-sizes" file output selected expected i
+    mkdir "$directory"
+    backup_dir="$directory"; NON_INTERACTIVE=0
+    header() { :; }; step() { :; }; prepare_backup_directory() { :; }
+    restore_hot_backup() { printf '%s' "$1" >"$work/selected-backup"; }
+    for i in {1..10}; do
+        printf -v file '16-qa-%08d-010101-dmp.tar.gz' "$i"
+        truncate -s "$((i * 1024))" "$directory/$file"
+    done
+    truncate -s 101478 "$directory/16-longer_name-20261001-010101-dmp.tar.gz"
+    truncate -s 10590618 "$directory/16-qa-20261002-010101-dmp.tar.gz"
+    truncate -s 1073741824 "$directory/16-qa-20261003-010101-dmp.tar.gz"
+    truncate -s 0 "$directory/16-empty-20261004-010101.tar.gz"
+    ln -s "$directory/16-qa-20261002-010101-dmp.tar.gz" "$directory/99-link-20261004-010101-dmp.tar.gz"
+    ln -s missing "$directory/99-broken-20261004-010101-dmp.tar.gz"
+    ln -s "$directory" "$work/restore-directory-link"
+    backup_dir="$work/restore-directory-link"
+    output="$(restore_menu <<<0)"
+    printf '%s\n' "$output"
+    [[ "$output" == *'99-link-20261004-010101-dmp.tar.gz'*'10.10 Мб'* ]]
+    [[ "$output" != *99-broken* && "$output" == *'99.10 Кб'* && "$output" == *'1.00 Гб'* && "$output" == *'0.00 Кб'* ]]
+    # Equal positions of decimal points prove alignment, including 2-digit indices.
+    printf '%s\n' "$output" | LC_ALL=C awk '
+        /tar.gz/ {
+            if (!match($0, /[0-9]+\.[0-9][0-9] [^ ]+$/)) exit 1
+            pos=RSTART+index(substr($0,RSTART),".")-1
+            if (count && pos!=previous) exit 1
+            previous=pos; count++
+        }
+        END { if (count!=15) exit 1 }'
+    restore_menu <<<1 >/dev/null
+    [[ "$(cat "$work/selected-backup")" == "$backup_dir/99-link-20261004-010101-dmp.tar.gz" ]]
+    stat() { return 1; }
+    output="$(restore_menu <<<0)"
+    [[ "$output" == *'н/д'* ]]
+}
 main_precedence() {
     source "$repo/create-claster.sh"
     # source inside a function makes declare variables local; do not run the
@@ -142,6 +181,7 @@ check DEB-WRONG-HOT nonzero builder_bad 3 BACKUP_FILE "$work/16-qa-20260912-0101
 check DEB-WRONG-COLD nonzero builder_bad 4 BACKUP_FILE "$work/16-qa-20260912-010101.tar.gz"
 check BK-SIZES 0 sizes
 check DEB-DISPLAY-SIZES 0 display_sizes
+check RESTORE-DISPLAY-SIZES 0 restore_display_sizes
 check MAIN-PRECEDENCE 0 main_precedence
 for action in info install port move-data backup restore delete; do check "MAIN-CLI-ENV-$action" 0 main_action "$action"; done
 for action in backup delete; do

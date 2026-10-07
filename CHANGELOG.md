@@ -4,6 +4,17 @@ All significant project changes are recorded in this file.
 
 [Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
 
+## 2.6.3 — 2026-10-07
+
+- Patch release for archive-size visibility in the interactive Restore picker.
+- The Restore backup list shows archive sizes with two decimal places, Russian
+  unit labels and aligned columns. Symbolic links use the target file size;
+  unavailable sizes display “н/д”. Listing does not unpack archives.
+- A destructive eight-way WSL run completed successfully: all eight chains,
+  cleanup audits and the new Restore-size contract passed. The journal records
+  3,816 PASS rows plus 120 successful return-code comparisons, with 27/61 plan
+  IDs fully confirmed and 34 retaining explicit untested variants.
+
 ## 2.6.2 — 2026-10-03
 
 - Patch release for generated cluster tuning and automatic Postgres Pro

@@ -32,6 +32,8 @@
 #   execution, including unattended and cleanup calls, without extra prompts.
 #   Displayed database and data-directory sizes use an aligned field of at most
 #   nine characters, including a space and a two-letter binary size unit.
+#   The interactive Restore picker likewise shows aligned archive sizes without
+#   opening archives; backup symlinks report the size of their target file.
 #   Every newly created backup contains a commented, shell-safe command that
 #   rebuilds the corresponding mode 3 or mode 4 Debian package non-interactively.
 #
@@ -157,7 +159,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.6.2"
+readonly SCRIPT_VERSION="2.6.3"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -282,6 +284,8 @@ pgpro_scheduler включён в shared_preload_libraries, в lib_preloaded.con
 задаётся schedule.auto_enabled=on.
 Размеры БД и каталогов данных показываются в выровненном поле шириной девять
 символов: две цифры после точки, пробел и двухбуквенная единица измерения.
+В интерактивном списке «Рестори» так же показываются размеры архивов; архивы
+не открываются, а для символьной ссылки используется размер целевого файла.
 
 Конфиг: --config ФАЙЛ > PGCC_CFG > /usr/local/shared/pg_claster_creator/.new-claster.config,
 при отсутствии — .new-claster.config рядом с разрешённым сценарием.
@@ -2348,8 +2352,8 @@ validate_database_name() {
 human_size_label() {
     local bytes="$1"
     [[ "${bytes}" =~ ^[0-9]+$ ]] || return 1
-    env LC_ALL=C awk -v bytes="${bytes}" 'BEGIN {
-        split("Kb Mb Gb Tb Pb Eb", units, " ")
+    env LC_ALL=C awk -v bytes="${bytes}" -v labels="${2:-Kb Mb Gb Tb Pb Eb}" 'BEGIN {
+        split(labels, units, " ")
         value = bytes / 1024
         unit = 1
         while (unit < 6 && value >= 999.995) {
@@ -3570,8 +3574,21 @@ restore_menu() {
             pause
             return 0
         fi
-        local i
-        for i in "${!backups[@]}"; do printf '%3d - %s\n' "$((i + 1))" "${backups[i]}"; done
+        local i name_width=0 size_bytes size_label
+        for file in "${backups[@]}"; do
+            ((${#file} <= name_width)) || name_width=${#file}
+        done
+        for i in "${!backups[@]}"; do
+            # Read the archive's actual file size, following backup symlinks.
+            # Do not open/decompress archives just to display the selection list.
+            if size_bytes="$(stat -Lc '%s' -- "${backup_dir}/${backups[i]}" 2>/dev/null)" &&
+               size_label="$(human_size_label "${size_bytes}" 'Кб Мб Гб Тб Пб Эб')"; then
+                printf '%3d - %-*s  %6s %s\n' "$((i + 1))" "${name_width}" "${backups[i]}" \
+                    "${size_label% *}" "${size_label##* }"
+            else
+                printf '%3d - %-*s  %s\n' "$((i + 1))" "${name_width}" "${backups[i]}" 'н/д'
+            fi
+        done
         printf '  0 - Вернуться назад\n'
         read -r -p "Выберите резервную копию: " choice || return 0
         [[ "${choice}" =~ ^[0-9]+$ ]] || return 0

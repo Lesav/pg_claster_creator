@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-10-03" "pg_claster_creator 2.6.2" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-10-07" "pg_claster_creator 2.6.3" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -106,6 +106,9 @@ Create a cold cluster archive or a hot custom-format database dump.
 .TP
 .B restore
 Restore a cold cluster archive or a hot database dump.
+The interactive picker displays aligned archive sizes with two fractional digits
+and Russian binary-unit labels without opening or unpacking the archives. A backup
+symlink uses its target file size; an unavailable size is shown as \(lqн/д\(rq.
 After cold extraction, before starting the cluster, set /var/log/postgresql
 to root:postgres mode 1775 without recursion. Existing log files retain their
 permissions. A directory symlink or a failure to create/chown/chmod the directory
