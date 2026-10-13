@@ -1,4 +1,4 @@
-.TH CREATE-CLASTER.SH 1 "2026-10-07" "pg_claster_creator 2.6.3" "User Commands"
+.TH CREATE-CLASTER.SH 1 "2026-10-13" "pg_claster_creator 2.6.4" "User Commands"
 .SH NAME
 create-claster.sh \- prepare PostgreSQL packages and manage PostgreSQL clusters
 .SH SYNOPSIS
@@ -56,6 +56,9 @@ changes. SHOW server_version; is a harmless test. CLI SQL is also supported; see
 .PP
 Edit item 1 renames a cluster using pg_renamecluster after validating
 the new name within the same major version and stopping the source cluster.
+It asks where to place the renamed data directory. The current parent directory
+is the default, so the usual same-filesystem operation is a fast directory
+rename; another data root can be selected when relocation is required.
 Project paths and units are updated; port, running state and boot enablement
 are preserved. Database/role names and external cron jobs are not renamed.
 Configuration and unit copies are retained in /var/tmp/pgcc-rename.* (not database data).
@@ -205,6 +208,11 @@ Control emergency WAL reset before cold backup. The default is no.
 Permit an existing user database to be dropped, recreated with its previous
 owner, and restored from scratch. The default is no. The postgres, template0,
 and template1 databases cannot be replaced.
+.TP
+.BI "--restore-optimize " YES|NO
+Control replacement of optimize-claster.conf from a hot backup without a
+confirmation prompt. In interactive mode, omission keeps the y/N question.
+Non-interactive restore defaults to no.
 .SH POSITIONAL TARGET
 The
 .B backup
@@ -221,6 +229,12 @@ Cold archives contain the complete per-cluster configuration directory, data,
 the selected log file, systemd unit,
 and metadata. Hot archives contain a custom-format dump and
 .IR backup-info.env .
+When the source cluster has conf.d/optimize-claster.conf, the hot archive also
+contains it as optimize-claster.conf. After an interactive hot restore, the
+current and archived files are displayed in left and right terminal columns.
+A separate y/Y confirmation replaces the target; Enter keeps it. The
+--restore-optimize option or PGCC_RESTORE_OPTIMIZE supplies yes/no without a
+prompt; non-interactive restore defaults to no.
 Before a cold backup, the data-directory size is displayed in the same aligned
 nine-character format. Exact database and directory sizes in bytes are also
 stored in metadata.
@@ -277,8 +291,9 @@ Command-line options override the corresponding variables:
 .BR PGCC_IF_MISSING ,
 .BR PGCC_BACKUP_BEFORE_DELETE ,
 .BR PGCC_CLEAR_WAL ,
+.BR PGCC_OVERWRITE ,
 and
-.BR PGCC_OVERWRITE .
+.BR PGCC_RESTORE_OPTIMIZE .
 .SH CLUSTER DELETION
 All supported server families use the same direct deletion procedure without
 pg_dropcluster: stop, verify pg_ctl status and systemd, then remove the exact

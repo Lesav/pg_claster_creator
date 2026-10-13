@@ -16,12 +16,12 @@ state() { pg_lsclusters --no-header | awk -v n="$1" '$2==n {print $4}'; }
 if [[ "$phase" == ui ]]; then
 step RENAME-CANCEL 0 menu_input "$(printf '4\n1\n%s\n0\n0\n0\n' "$(index "$c")")"
 step RENAME-CANCEL-STATE 0 test "$(state "$c")" = online
-step RENAME-ONLINE 0 menu_input "$(printf '4\n1\n%s\n%sren\ny\n\n0\n0\n' "$(index "$c")" "$c")"
+step RENAME-ONLINE 0 menu_input "$(printf '4\n1\n%s\n%sren\n1\ny\n\n0\n0\n' "$(index "$c")" "$c")"
 step RENAMED-ONLINE 0 test "$(state "${c}ren")" = online
 step RENAMED-SQL 0 test "$(sql "${c}ren" "$core_c" "$query")" = "$baseline"
 step RENAMED-FULL 0 verify_reference "${c}ren" "$core_c"
 step RENAMED-STOP 0 menu_input "$(printf '3\n%sren\ny\n\n0\n' "$c")"
-step RENAME-DOWN 0 menu_input "$(printf '4\n1\n%s\n%s\ny\n\n0\n0\n' "$(index "${c}ren")" "$c")"
+step RENAME-DOWN 0 menu_input "$(printf '4\n1\n%s\n%s\n1\ny\n\n0\n0\n' "$(index "${c}ren")" "$c")"
 step RENAMED-DOWN 0 test "$(state "$c")" = down
 else
     # Independent continuation after a recorded rename failure; not a rename PASS.

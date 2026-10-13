@@ -2,7 +2,7 @@
 
 Manage PostgreSQL clusters on Astra Linux and compatible Debian-based systems using interactive Bash menus or command-line automation. Build Debian packages that install the tools and optionally deploy a cluster, restore a backup, or initialize a database from SQL.
 
-**Version:** 2.6.3 · **Language:** English | [Русский](README_ru.md)
+**Version:** 2.6.4 · **Language:** English | [Русский](README_ru.md)
 
 The spelling `claster` is retained in project, command, and package names for compatibility. Interactive messages and `--help` output are currently in Russian; script headers and manual pages include English documentation.
 
@@ -28,6 +28,13 @@ The spelling `claster` is retained in project, command, and package names for co
 | `create-claster-deb.sh` | Build scripts-only or database-deployment DEB packages. |
 
 Hot backups use PostgreSQL custom-format dumps. Cold backups contain cluster data, configuration, and service information. Both include metadata identifying the source server. Backup directories and readable backup/SQL files may be accessed through symbolic links. The interactive Restore picker displays aligned archive sizes without opening or unpacking the archives; backup symlinks use the target size.
+
+When present, a hot backup also contains the source cluster's
+`conf.d/optimize-claster.conf`. After an interactive hot restore, the current
+target file and the archived file are displayed side by side. Replacing the
+target requires a separate `y/Y` confirmation; Enter keeps the current file.
+`--restore-optimize yes|no` or `PGCC_RESTORE_OPTIMIZE=yes|no` supplies the answer
+without a prompt. Non-interactive restore defaults to `no`.
 
 New clusters receive `conf.d/optimize-claster.conf` with `max_wal_size = 4GB`,
 `min_wal_size = 1GB`, `shared_buffers = 2GB`, and
@@ -143,6 +150,10 @@ The five `cls_*` defaults are preserved when the script saves server selection o
 
 Selecting `--action` or `PGCC_ACTION` disables menus and confirmations. Missing required parameters cause an error; use explicit targets and review destructive options before automation.
 
+Interactive rename asks where to place the renamed data directory. Its current
+parent directory is the default, allowing a same-filesystem directory rename;
+an alternative data root can be selected when relocation is required.
+
 ### Cluster commands
 
 The following examples assume an existing `16/demo` cluster and `demo` database; adjust the version, names, and paths to your host:
@@ -191,12 +202,12 @@ bash ./create-claster-deb.sh --config ./.new-claster.config \
   --mode 1 --non-interactive
 ```
 
-The output is `dist/claster-creator-2.6.3.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI and GitHub Actions check and build the package, retain it as a job artifact, and publish DEB/checksum attachments for matching `vX.Y.Z` tags. GitHub Actions uses a hosted Ubuntu runner and the automatic job token. See [CI and release builds](CI.md) for requirements, release guards and verification scope.
+The output is `dist/claster-creator-2.6.4.deb`. Generated `dist/` contents are ignored by Git. GitFlic CI and GitHub Actions check and build the package, retain it as a job artifact, and publish DEB/checksum attachments for matching `vX.Y.Z` tags. GitHub Actions uses a hosted Ubuntu runner and the automatic job token. See [CI and release builds](CI.md) for requirements, release guards and verification scope.
 
 Install this scripts-only package on a host with the required repositories configured:
 
 ```bash
-sudo apt install ./dist/claster-creator-2.6.3.deb
+sudo apt install ./dist/claster-creator-2.6.4.deb
 ```
 
 | Mode | Action when the package is installed |
@@ -281,16 +292,17 @@ This path is inactive on ordinary physical or virtual Linux hosts. It does not c
 - [Russian README](README_ru.md) — technical translation of this guide.
 - [CHANGELOG.md](CHANGELOG.md) — release history in English; [Russian original](CHANGELOG_ru.md).
 - [TEST.md](TEST.md) — test preparation, full test plan, cleanup rules, and result criteria (Russian).
-- [TEST-2.6.3-journal-passed.md](TEST-2.6.3-journal-passed.md) — latest recorded test run (Russian).
+- [TEST-2.6.4-journal-passed.md](TEST-2.6.4-journal-passed.md) — latest recorded test run (Russian).
 - English manuals: cluster management, backup wrapper, package builder.
 - [tools/INDEX.md](tools/INDEX.md) — reusable helper catalog; check each helper's header and environment assumptions before use.
 
 After DEB installation, use `man create-claster.sh`, `man create-claster-backup.sh`, or `man create-claster-deb.sh`. Russian pages can be selected with `LANG=ru_RU.UTF-8 man create-claster.sh` when that locale is available.
 
-The recorded 2.6.3 destructive run covers eight WSL distributions with
-concurrency 8. All eight chains, final cleanup audits, live SQL
-`singl/struct-dirs`, and the Restore-size contract passed: 3,816 PASS rows and
-120 successful return-code comparisons, with no product failures. The journal
+The recorded 2.6.4 destructive run covers eight WSL distributions with
+concurrency 8. All eight final chains, cleanup audits, live SQL
+`singl/struct-dirs`, rename placement, and hot-restore tuning contracts passed:
+3,840 PASS rows and 120 successful return-code comparisons, with no product
+failures. The journal
 fully confirms 27 of 61 plan IDs; 34 retain explicitly listed untested variants.
 The requested `passed` suffix means the executed checks passed; it does **not**
 mean full coverage.

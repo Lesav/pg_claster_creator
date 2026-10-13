@@ -127,6 +127,37 @@ restore_display_sizes() {
     output="$(restore_menu <<<0)"
     [[ "$output" == *'н/д'* ]]
 }
+hot_optimize_contract() {
+    source "$repo/create-claster.sh"
+    trap - EXIT
+    local root="$work/hot-optimize" dump=16-qa-20261013-010101-dmp.backup archive output
+    mkdir -p "$root/etc/postgresql/16/qa/conf.d" "$root/archive"
+    printf 'current = 1\n' >"$root/etc/postgresql/16/qa/conf.d/optimize-claster.conf"
+    printf 'archived = 2\n' >"$root/archive/optimize-claster.conf"
+    printf 'dump\n' >"$root/archive/$dump"
+    printf 'backup_type=hot\n' >"$root/archive/backup-info.env"
+    archive="$root/16-qa-20261013-010101-dmp.tar.gz"
+    tar -czf "$archive" -C "$root/archive" "$dump" backup-info.env optimize-claster.conf
+    validate_hot_backup_archive_contents "$archive" "$dump"
+    eval "$(declare -f offer_hot_backup_optimize_restore | sed "s#/etc/#$root/etc/#g")"
+    NON_INTERACTIVE=0
+    confirm() { return 1; }
+    output="$(offer_hot_backup_optimize_restore 16 qa "$root/archive/optimize-claster.conf")"
+    printf '%s\n' "$output"
+    [[ "$output" == *'ТЕКУЩИЙ optimize-claster.conf'*'ИЗ БЭКАПА optimize-claster.conf'*'Настройки кластера оставлены без изменений.'* ]]
+    grep -Fxq 'current = 1' "$root/etc/postgresql/16/qa/conf.d/optimize-claster.conf"
+    confirm() { return 0; }
+    offer_hot_backup_optimize_restore 16 qa "$root/archive/optimize-claster.conf"
+    cmp -s "$root/archive/optimize-claster.conf" "$root/etc/postgresql/16/qa/conf.d/optimize-claster.conf"
+    NON_INTERACTIVE=1
+    printf 'current = 3\n' >"$root/etc/postgresql/16/qa/conf.d/optimize-claster.conf"
+    RESTORE_OPTIMIZE=""
+    offer_hot_backup_optimize_restore 16 qa "$root/archive/optimize-claster.conf"
+    grep -Fxq 'current = 3' "$root/etc/postgresql/16/qa/conf.d/optimize-claster.conf"
+    RESTORE_OPTIMIZE=yes
+    offer_hot_backup_optimize_restore 16 qa "$root/archive/optimize-claster.conf"
+    cmp -s "$root/archive/optimize-claster.conf" "$root/etc/postgresql/16/qa/conf.d/optimize-claster.conf"
+}
 main_precedence() {
     source "$repo/create-claster.sh"
     # source inside a function makes declare variables local; do not run the
@@ -182,6 +213,7 @@ check DEB-WRONG-COLD nonzero builder_bad 4 BACKUP_FILE "$work/16-qa-20260912-010
 check BK-SIZES 0 sizes
 check DEB-DISPLAY-SIZES 0 display_sizes
 check RESTORE-DISPLAY-SIZES 0 restore_display_sizes
+check HOT-OPTIMIZE-CONTRACT 0 hot_optimize_contract
 check MAIN-PRECEDENCE 0 main_precedence
 for action in info install port move-data backup restore delete; do check "MAIN-CLI-ENV-$action" 0 main_action "$action"; done
 for action in backup delete; do
@@ -192,7 +224,7 @@ for action in backup delete; do
 done
 for action in info install port move-data restore; do check "MAIN-POSITIONAL-REFUSED-$action" nonzero main_bad --action "$action" 16 qa; done
 check MAIN-UNKNOWN-ACTION nonzero main_bad --action invalid
-for option in --action --package --pg-version --cluster-name --port --schema --user --password --data-root --backup-dir --backup-file --backup-type --database --overwrite; do
+for option in --action --package --pg-version --cluster-name --port --schema --user --password --data-root --backup-dir --backup-file --backup-type --database --overwrite --restore-optimize; do
     check "MAIN-MISSING-${option#--}" nonzero main_bad "$option"
 done
 env_value() {
@@ -286,5 +318,6 @@ done <<'MAP'
 --backup-before-delete PGCC_BACKUP_BEFORE_DELETE BACKUP_BEFORE_DELETE no yes
 --clear-wal PGCC_CLEAR_WAL CLEAR_WAL no yes
 --overwrite PGCC_OVERWRITE OVERWRITE_EXISTING no yes
+--restore-optimize PGCC_RESTORE_OPTIMIZE RESTORE_OPTIMIZE no yes
 MAP
 ! grep -q $'\tFAIL\t' "$logs/results.tsv"

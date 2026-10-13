@@ -30,6 +30,12 @@
 #   syslog-ng is not restarted/reloaded implicitly; print the required next step.
 #   Cluster and vendor-service stop requests are announced on stderr before
 #   execution, including unattended and cleanup calls, without extra prompts.
+#   Interactive cluster rename asks where the renamed data directory belongs;
+#   the current parent is the default so the usual operation is a fast rename.
+#   Hot backups include conf.d/optimize-claster.conf when it exists. Interactive
+#   hot restore shows the current and archived files side by side and offers an
+#   explicit N/y replacement. --restore-optimize / PGCC_RESTORE_OPTIMIZE can
+#   answer this non-interactively; unattended restore defaults to preserving it.
 #   Displayed database and data-directory sizes use an aligned field of at most
 #   nine characters, including a space and a two-letter binary size unit.
 #   The interactive Restore picker likewise shows aligned archive sizes without
@@ -122,6 +128,7 @@
 #       --backup-before-delete YES|NO  Control backup before cluster deletion.
 #       --clear-wal YES|NO             Control emergency WAL reset before backup.
 #       --overwrite YES|NO             Allow drop/recreate during hot restore.
+#       --restore-optimize YES|NO      Restore archived optimize-claster.conf.
 #
 # Positional arguments:
 #   The backup and delete actions additionally accept VERSION CLUSTER after the
@@ -142,7 +149,8 @@
 #   PGCC_CLUSTER_NAME, PGCC_CLUSTER_PORT, PGCC_SCHEMA, PGCC_DB_USER,
 #   PGCC_DB_PASSWORD, PGCC_DATA_ROOT, PGCC_BACKUP_DIR, PGCC_BACKUP_FILE,
 #   PGCC_BACKUP_TYPE, PGCC_DATABASE, PGCC_BACKUP_BEFORE_DELETE,
-#   PGCC_CLEAR_WAL, and PGCC_OVERWRITE mirror the command-line options.
+#   PGCC_CLEAR_WAL, PGCC_OVERWRITE, and PGCC_RESTORE_OPTIMIZE mirror the
+#   command-line options.
 #   PGCC_CLUSTER_PORT maps to --port; PGCC_DB_USER to --user;
 #   PGCC_DB_PASSWORD to --password; PGCC_DATABASE to --database.
 #   PGCC_SQL_FILE and PGCC_IF_MISSING mirror the SQL command-line options.
@@ -159,7 +167,7 @@
 
 set -Eeuo pipefail
 
-readonly SCRIPT_VERSION="2.6.3"
+readonly SCRIPT_VERSION="2.6.4"
 readonly SCRIPT_NAME="create-claster.sh"
 readonly SCRIPT_PATH="$(readlink -f -- "${BASH_SOURCE[0]}")"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${SCRIPT_PATH}")" && pwd -P)"
@@ -193,6 +201,7 @@ declare DATABASE_NAME=""
 declare BACKUP_BEFORE_DELETE="yes"
 declare CLEAR_WAL="no"
 declare OVERWRITE_EXISTING="no"
+declare RESTORE_OPTIMIZE=""
 declare TARGET_NAME_SET=0
 declare TARGET_PORT_SET=0
 declare TARGET_VERSION_SET=0
@@ -245,6 +254,7 @@ declare ARG_IF_MISSING=""
 declare ARG_BACKUP_BEFORE_DELETE=""
 declare ARG_CLEAR_WAL=""
 declare ARG_OVERWRITE=""
+declare ARG_RESTORE_OPTIMIZE=""
 declare -a POSITIONAL_ARGS=()
 
 usage() {
@@ -268,8 +278,9 @@ SQL выполняется от postgres только после y/Y; Enter — 
 SQL: --action sql --pg-version N --cluster-name ИМЯ --database БД --sql-file ФАЙЛ.
 SQL в меню: файл или каталог с .sql (рекурсивно, порядок путей LC_ALL=C).
 --if-missing error|skip: отсутствие цели — ошибка (по умолчанию) или предупреждение с кодом 0.
-Переименовать: проверка нового имени, остановка,
-переименование регистрации/путей и служб; исходное состояние запуска сохраняется.
+Переименовать: проверка нового имени, выбор размещения данных (по умолчанию
+прежний родительский каталог), остановка, переименование регистрации/путей и служб;
+исходное состояние запуска сохраняется.
 До запуска проверяются пути data/HBA/ident; автозапуск переносится без enable/disable.
 При ошибке выводятся этап и /var/tmp/pgcc-rename.*/rename-state.env; автоотката нет.
 Имена БД/ролей и задания cron не переименовываются.
@@ -282,6 +293,11 @@ SQL в меню: файл или каталог с .sql (рекурсивно, �
 min_wal_size=1GB, shared_buffers=2GB и max_worker_processes=16. Если доступный
 pgpro_scheduler включён в shared_preload_libraries, в lib_preloaded.conf также
 задаётся schedule.auto_enabled=on.
+Горячий бэкап включает optimize-claster.conf, если файл существует. При
+интерактивном горячем restore текущий и архивный файлы показываются рядом;
+замена выполняется только после отдельного y/Y (Enter — отказ). Ключ
+--restore-optimize и PGCC_RESTORE_OPTIMIZE задают ответ без вопроса;
+автоматический restore по умолчанию настройки кластера не заменяет.
 Размеры БД и каталогов данных показываются в выровненном поле шириной девять
 символов: две цифры после точки, пробел и двухбуквенная единица измерения.
 В интерактивном списке «Рестори» так же показываются размеры архивов; архивы
@@ -318,6 +334,8 @@ pgpro_scheduler включён в shared_preload_libraries, в lib_preloaded.con
       --clear-wal ДА|НЕТ              Выполнить pg_resetwal перед бэкапом; по умолчанию нет
       --overwrite ДА|НЕТ              Удалить и заново создать существующую БД
                                       при горячем restore
+      --restore-optimize ДА|НЕТ       Заменить optimize-claster.conf из hot-бэкапа;
+                                      без значения в меню вопрос, в CLI — нет
 
 Для backup и delete поддерживается форма pg_ctlcluster: два позиционных
 аргумента ВЕРСИЯ КЛАСТЕР после действия, например: backup 16 subsys.
@@ -333,7 +351,8 @@ pgpro_scheduler включён в shared_preload_libraries, в lib_preloaded.con
   PGCC_CLUSTER_NAME, PGCC_CLUSTER_PORT, PGCC_SCHEMA, PGCC_DB_USER,
   PGCC_DB_PASSWORD, PGCC_DATA_ROOT, PGCC_BACKUP_DIR, PGCC_BACKUP_FILE,
   PGCC_BACKUP_TYPE, PGCC_DATABASE,
-  PGCC_BACKUP_BEFORE_DELETE, PGCC_CLEAR_WAL, PGCC_OVERWRITE.
+  PGCC_BACKUP_BEFORE_DELETE, PGCC_CLEAR_WAL, PGCC_OVERWRITE,
+  PGCC_RESTORE_OPTIMIZE.
 Приоритет значений: ключи командной строки > PGCC_* > значения конфига.
 PGCC_CLUSTER_PORT соответствует --port, PGCC_DB_USER — --user,
 PGCC_DB_PASSWORD — --password, PGCC_DATABASE — --database.
@@ -358,7 +377,8 @@ PGCC_SQL_FILE и PGCC_IF_MISSING: SQL-файл и политика отсутс�
   ${SCRIPT_NAME} --action restore --backup-file 16-subsys-20260904-152034.tar.gz \\
     --cluster-name subsys2 --port 54322
   ${SCRIPT_NAME} --action restore --backup-file 16-subsys-20260905-101112-dmp.tar.gz \\
-    --pg-version 16 --cluster-name subsys2 --database targetdb --overwrite yes
+    --pg-version 16 --cluster-name subsys2 --database targetdb --overwrite yes \\
+    --restore-optimize yes
   ${SCRIPT_NAME} --action delete --pg-version 16 --cluster-name subsys2 \\
     --backup-before-delete yes --clear-wal no
   ${SCRIPT_NAME} --action delete 16 subsys2 --backup-before-delete no
@@ -430,6 +450,8 @@ parse_args() {
             --clear-wal=*) ARG_CLEAR_WAL="${1#*=}"; shift ;;
             --overwrite) option_value_required "$@"; ARG_OVERWRITE="$2"; shift 2 ;;
             --overwrite=*) ARG_OVERWRITE="${1#*=}"; shift ;;
+            --restore-optimize) option_value_required "$@"; ARG_RESTORE_OPTIMIZE="$2"; shift 2 ;;
+            --restore-optimize=*) ARG_RESTORE_OPTIMIZE="${1#*=}"; [[ -n "${ARG_RESTORE_OPTIMIZE}" ]] || die "для ключа --restore-optimize требуется значение"; shift ;;
             --) shift; POSITIONAL_ARGS+=("$@"); break ;;
             -*) die "неизвестный ключ: $1 (используйте --help)" ;;
             *) POSITIONAL_ARGS+=("$1"); shift ;;
@@ -477,6 +499,11 @@ apply_runtime_options() {
     BACKUP_BEFORE_DELETE="$(normalize_yes_no "${ARG_BACKUP_BEFORE_DELETE:-${PGCC_BACKUP_BEFORE_DELETE:-yes}}")"
     CLEAR_WAL="$(normalize_yes_no "${ARG_CLEAR_WAL:-${PGCC_CLEAR_WAL:-no}}")"
     OVERWRITE_EXISTING="$(normalize_yes_no "${ARG_OVERWRITE:-${PGCC_OVERWRITE:-no}}")"
+    if [[ -n "${ARG_RESTORE_OPTIMIZE:-${PGCC_RESTORE_OPTIMIZE:-}}" ]]; then
+        RESTORE_OPTIMIZE="$(normalize_yes_no "${ARG_RESTORE_OPTIMIZE:-${PGCC_RESTORE_OPTIMIZE}}")"
+    else
+        RESTORE_OPTIMIZE=""
+    fi
     BACKUP_TYPE="${ARG_BACKUP_TYPE:-${PGCC_BACKUP_TYPE:-cold}}"
     case "${BACKUP_TYPE,,}" in
         1|hot|горячий) BACKUP_TYPE=hot ;;
@@ -747,7 +774,8 @@ require_root() {
         for variable in PGCC_CFG PGCC_ACTION PGCC_PACKAGE PGCC_PG_FAMILY PGCC_PG_VERSION \
             PGCC_CLUSTER_NAME PGCC_CLUSTER_PORT PGCC_SCHEMA PGCC_DB_USER PGCC_DB_PASSWORD \
             PGCC_DATA_ROOT PGCC_BACKUP_DIR PGCC_BACKUP_FILE PGCC_BACKUP_TYPE PGCC_DATABASE \
-            PGCC_BACKUP_BEFORE_DELETE PGCC_CLEAR_WAL PGCC_OVERWRITE PGCC_SQL_FILE PGCC_IF_MISSING; do
+            PGCC_BACKUP_BEFORE_DELETE PGCC_CLEAR_WAL PGCC_OVERWRITE PGCC_RESTORE_OPTIMIZE \
+            PGCC_SQL_FILE PGCC_IF_MISSING; do
             [[ ! -v "$variable" ]] || config_env+=("$variable=${!variable}")
         done
         command -v sudo >/dev/null 2>&1 || die "сценарий нужно запускать от root"
@@ -1958,16 +1986,24 @@ validate_renamed_cluster_config() {
 # Use a subshell so recovery diagnostics cannot replace the caller's EXIT trap.
 rename_cluster_checked() (
     local version="$1" name="$2" new_name="$3" data="$4" status="$5"
-    local new_data conflict service old_unit new_unit conf new_conf candidate recovery rows reported
+    local native_new_data requested_new_data="${6:-}" new_data conflict service old_unit new_unit conf new_conf candidate recovery rows reported
     local old_log new_log file was_online=no stats new_stats backup_index=0 home owner status_rc=0 phase=preflight
     local old_service="postgresql@${version}-${name}.service" new_service="postgresql@${version}-${new_name}.service" link
     local -a enabled_links=()
     validate_identifier "${new_name}" && ((${#new_name} <= 63)) || die "недопустимое новое имя кластера"
     [[ "${name}" != "${new_name}" ]] || die "новое имя совпадает с текущим"
     command -v pg_renamecluster >/dev/null || die "не найдена команда pg_renamecluster"
-    new_data="$(renamed_cluster_path "${data}" "${name}" "${new_name}")" || die "не удалось определить новый путь данных"
+    native_new_data="$(renamed_cluster_path "${data}" "${name}" "${new_name}")" || die "не удалось определить новый путь данных"
+    new_data="${requested_new_data:-${native_new_data}}"
     [[ "${data}" == /* && "${data}" != / && -d "${data}" && ! -L "${data}" ]] || die "небезопасный исходный каталог данных"
     [[ -d "${new_data%/*}" ]] || die "родительский каталог нового пути не существует: ${new_data%/*}"
+    [[ "${new_data}" == /* && "${new_data}" != / && ! -L "${new_data}" && \
+        ( "${new_data}" == "${data}" || "${new_data##*/}" == "${new_name}" ) ]] || \
+        die "небезопасный целевой каталог данных: ${new_data}"
+    if [[ "${native_new_data}" != "${new_data}" ]]; then
+        data_directory_available "${native_new_data}" || die \
+            "временный каталог переименования уже занят: ${native_new_data}"
+    fi
     # Name conflicts are scoped to the PostgreSQL major. An unchanged custom
     # data directory belongs to this source cluster, not a foreign target.
     if [[ "${new_data}" == "${data}" ]]; then
@@ -2063,7 +2099,12 @@ rename_cluster_checked() (
     if ! PG_CLUSTER_CONF_ROOT=/etc/postgresql run_parsec_aware timeout -k 5s 60s pg_renamecluster "${version}" "${name}" "${new_name}"; then
         die "pg_renamecluster завершился ошибкой; возможны частичные изменения. Кластер не запускается автоматически. Копия: ${recovery}"
     fi
-    [[ -d "${new_conf}" && -d "${new_data}" ]] || die "после переименования нет ожидаемых каталогов; копия: ${recovery}"
+    [[ -d "${new_conf}" && -d "${native_new_data}" ]] || die "после переименования нет ожидаемых каталогов; копия: ${recovery}"
+    if [[ "${native_new_data}" != "${new_data}" ]]; then
+        phase=data-move
+        mv -- "${native_new_data}" "${new_data}" || die \
+            "не удалось переместить каталог данных ${native_new_data} в ${new_data}"
+    fi
     phase=configuration
     # Native helpers move standard log files but can leave conf/log pointing
     # at the old name; the next start would recreate that old log. Preserve
@@ -2073,9 +2114,11 @@ rename_cluster_checked() (
     fi
     while IFS= read -r -d '' file; do
         rewrite_renamed_cluster_file "${file}" "${conf}" "${new_conf}" "${data}" "${new_data}" "${version}-${name}" "${version}-${new_name}"
+        [[ "${native_new_data}" == "${new_data}" ]] || replace_literal_in_file "${native_new_data}" "${new_data}" "${file}"
     done < <(find "${new_conf}" -type f -print0)
     for file in "${new_data}/postgresql.auto.conf" "${new_data}/postmaster.opts"; do
         rewrite_renamed_cluster_file "${file}" "${conf}" "${new_conf}" "${data}" "${new_data}" "${version}-${name}" "${version}-${new_name}"
+        [[ "${native_new_data}" == "${new_data}" ]] || replace_literal_in_file "${native_new_data}" "${new_data}" "${file}"
     done
     mkdir -p "${new_conf}/conf.d"
     if [[ -d "/etc/systemd/system/${new_service}.d" && ! -L "/etc/systemd/system/${new_service}.d" ]]; then
@@ -2124,6 +2167,7 @@ rename_cluster_checked() (
 
 rename_cluster_menu() {
     local version name port status owner data log new_name conflict new_data
+    local current_base target_base target_root choice
     header
     step "Кластер: Переименовать"
     select_cluster "Выберите кластер" || return 0
@@ -2133,7 +2177,33 @@ rename_cluster_menu() {
         [[ "${new_name}" != 0 ]] || return 0
         validate_identifier "${new_name}" && ((${#new_name} <= 63)) || { warn "имя: 1–63 символа, строчные латинские буквы, цифры и подчёркивание; не начинается с цифры"; continue; }
         [[ "${new_name}" != "${name}" ]] || { warn "новое имя совпадает с текущим"; continue; }
-        new_data="$(renamed_cluster_path "${data}" "${name}" "${new_name}")"
+        current_base="${data%/*}"
+        while true; do
+            printf '\nРазмещение каталога данных после переименования:\n'
+            printf '1 - В прежнем родительском каталоге: %s (быстрое переименование)\n' "${current_base}"
+            printf '2 - Указать другой корневой каталог\n'
+            printf '0 - Вернуться назад\n'
+            read -r -p "Выбор [1]: " choice || return 0
+            choice="${choice:-1}"
+            case "${choice}" in
+                0) return 0 ;;
+                1) target_base="${current_base}" ;;
+                2)
+                    read -r -p "Полный путь корневого каталога (например /DATA): " target_root || return 0
+                    if ! target_base="$(install_data_base_from_root "${target_root}" "${version}")"; then
+                        warn "укажите абсолютный путь без пробельных символов"
+                        continue
+                    fi
+                    ;;
+                *) warn "выберите 0, 1 или 2"; continue ;;
+            esac
+            new_data="${target_base}/${new_name}"
+            if ! validate_cluster_move_destination "${data}" "${new_data}" "${new_name}"; then
+                warn "целевой каталог ${new_data} занят, совпадает с текущим либо небезопасен"
+                continue
+            fi
+            break
+        done
         if conflict="$(restore_target_conflict "${version}" "${new_name}" "$([[ "${data}" == "${new_data}" ]] && printf '/etc/postgresql/%s/%s' "${version}" "${new_name}" || printf '%s' "${new_data}")" rename)"; then
             warn "${conflict}"; continue
         fi
@@ -2141,7 +2211,8 @@ rename_cluster_menu() {
     done
     printf 'Кластер: %s/%s -> %s/%s\nДанные: %s -> %s\n' "${version}" "${name}" "${version}" "${new_name}" "${data}" "${new_data}"
     confirm "Остановить кластер и переименовать?" Y || return 0
-    rename_cluster_checked "${version}" "${name}" "${new_name}" "${data}" "${status}"
+    ensure_data_base_directory "${target_base}"
+    rename_cluster_checked "${version}" "${name}" "${new_name}" "${data}" "${status}" "${new_data}"
     pause
 }
 
@@ -2888,18 +2959,80 @@ resolve_backup_file() {
 }
 
 validate_hot_backup_archive_contents() {
-    local archive="$1" dump_name="$2" entry dump_entries=0 metadata_entries=0
+    local archive="$1" dump_name="$2" entry dump_entries=0 metadata_entries=0 optimize_entries=0
     local -a entries=()
     mapfile -t entries < <(tar -tzf "${archive}")
     for entry in "${entries[@]}"; do
         case "${entry}" in
             "${dump_name}") ((dump_entries += 1)) ;;
             backup-info.env) ((metadata_entries += 1)) ;;
+            optimize-claster.conf) ((optimize_entries += 1)) ;;
             *) die "недопустимый файл в горячем архиве: ${entry}" ;;
         esac
     done
     ((dump_entries == 1)) || die "в горячем архиве должен находиться файл ${dump_name}"
     ((metadata_entries <= 1)) || die "в горячем архиве найдено несколько файлов backup-info.env"
+    ((optimize_entries <= 1)) || die "в горячем архиве найдено несколько файлов optimize-claster.conf"
+}
+
+display_files_side_by_side() {
+    local left_file="$1" right_file="$2" left_label="$3" right_label="$4"
+    local columns=120 gap=3 pane_width
+    if [[ -t 1 && -n "${TERM:-}" && "${TERM}" != dumb && "${TERM}" != unknown ]] && command -v tput >/dev/null 2>&1; then
+        columns="$(tput cols 2>/dev/null || printf 120)"
+    fi
+    [[ "${columns}" =~ ^[0-9]+$ ]] || columns=120
+    ((columns < 80)) && columns=80
+    pane_width=$(((columns - gap) / 2))
+    printf '\n%-*.*s | %-*.*s\n' "${pane_width}" "${pane_width}" "${left_label}" \
+        "${pane_width}" "${pane_width}" "${right_label}"
+    printf '%*s-+-%*s\n' "${pane_width}" '' "${pane_width}" '' | tr ' ' '-'
+    paste \
+        <(if [[ -f "${left_file}" && ! -L "${left_file}" ]]; then expand -t 4 -- "${left_file}"; else printf '%s\n' '[файл отсутствует]'; fi) \
+        <(expand -t 4 -- "${right_file}") | \
+        env LC_ALL=C awk -F '\t' -v width="${pane_width}" \
+            '{ printf "%-*.*s | %-*.*s\n", width, width, $1, width, width, $2 }'
+    printf '\n'
+}
+
+offer_hot_backup_optimize_restore() {
+    local version="$1" cluster="$2" backup_file="$3"
+    local target_file="/etc/postgresql/${version}/${cluster}/conf.d/optimize-claster.conf"
+    local target_dir temporary
+    [[ -f "${backup_file}" && ! -L "${backup_file}" ]] || die \
+        "файл optimize-claster.conf из горячего бэкапа небезопасен"
+    if ((NON_INTERACTIVE)) && [[ "${RESTORE_OPTIMIZE}" != yes ]]; then
+        warn "optimize-claster.conf из горячего бэкапа не восстановлен: задайте --restore-optimize yes или PGCC_RESTORE_OPTIMIZE=yes для замены"
+        return 0
+    fi
+    if ((!NON_INTERACTIVE)); then
+        printf 'Сравнение настроек кластера:\n  текущий:   %s\n  из бэкапа: %s\n' \
+            "${target_file}" "${backup_file}"
+        display_files_side_by_side "${target_file}" "${backup_file}" \
+            "ТЕКУЩИЙ optimize-claster.conf" "ИЗ БЭКАПА optimize-claster.conf"
+    fi
+    if [[ "${RESTORE_OPTIMIZE}" == no ]] || \
+       { [[ -z "${RESTORE_OPTIMIZE}" ]] && ! confirm "Заменить текущий optimize-claster.conf файлом из бэкапа?" N; }; then
+        printf 'Настройки кластера оставлены без изменений.\n'
+        return 0
+    fi
+    [[ ! -L "${target_file}" ]] || die "целевой файл ${target_file} является символьной ссылкой"
+    target_dir="${target_file%/*}"
+    [[ -d "${target_dir}" && ! -L "${target_dir}" ]] || die \
+        "небезопасный каталог настроек ${target_dir}"
+    temporary="$(mktemp "${target_file}.tmp.XXXXXX")" || die \
+        "не удалось создать временный файл рядом с ${target_file}"
+    cp -- "${backup_file}" "${temporary}" || { rm -f -- "${temporary}"; die "не удалось подготовить ${target_file}"; }
+    if [[ -f "${target_file}" ]]; then
+        chown --reference="${target_file}" -- "${temporary}" || { rm -f -- "${temporary}"; die "не удалось сохранить владельца ${target_file}"; }
+        chmod --reference="${target_file}" -- "${temporary}" || { rm -f -- "${temporary}"; die "не удалось сохранить права ${target_file}"; }
+    else
+        chown root:root -- "${temporary}" || { rm -f -- "${temporary}"; die "не удалось назначить владельца ${target_file}"; }
+        chmod 0644 -- "${temporary}" || { rm -f -- "${temporary}"; die "не удалось назначить права ${target_file}"; }
+    fi
+    mv -f -- "${temporary}" "${target_file}" || { rm -f -- "${temporary}"; die "не удалось заменить ${target_file}"; }
+    printf 'Настройки кластера восстановлены: %s\n' "${target_file}"
+    warn "часть параметров PostgreSQL может потребовать перезапуска кластера"
 }
 
 replace_literal_in_file() {
@@ -3032,7 +3165,7 @@ make_hot_backup() {
     local version="$1" cluster="$2" port="$3" status="$4" data="$5" database="$6"
     local database_verified="${7:-no}"
     local home socket_dir timestamp archive dump_name stage version_text database_number database_index archive_mode
-    local cluster_package backup_family backup_version
+    local cluster_package backup_family backup_version optimize_file
     prepare_backup_directory write
     [[ "${status}" == online* ]] || die "для горячего бэкапа кластер ${version}/${cluster} должен быть запущен"
     validate_database_name "${database}" || die "недопустимое имя базы данных: ${database}"
@@ -3080,7 +3213,20 @@ make_hot_backup() {
         write_hot_database_metadata "${database}" "${database_index}"
         write_hot_backup_role_metadata
     } >"${stage}/backup-info.env"
-    tar -czf "${archive}" -C "${stage}" "${dump_name}" backup-info.env || die \
+    optimize_file="/etc/postgresql/${version}/${cluster}/conf.d/optimize-claster.conf"
+    if [[ -e "${optimize_file}" || -L "${optimize_file}" ]]; then
+        [[ -f "${optimize_file}" && ! -L "${optimize_file}" ]] || die \
+            "файл настроек ${optimize_file} должен быть обычным файлом"
+        cp -- "${optimize_file}" "${stage}/optimize-claster.conf" || die \
+            "не удалось добавить ${optimize_file} в горячий бэкап"
+        chmod 0600 "${stage}/optimize-claster.conf" || die \
+            "не удалось защитить копию optimize-claster.conf"
+    else
+        warn "файл настроек ${optimize_file} отсутствует и не добавлен в горячий бэкап"
+    fi
+    local -a hot_archive_entries=("${dump_name}" backup-info.env)
+    [[ ! -f "${stage}/optimize-claster.conf" ]] || hot_archive_entries+=(optimize-claster.conf)
+    tar -czf "${archive}" -C "${stage}" "${hot_archive_entries[@]}" || die \
         "не удалось упаковать горячий дамп"
     chmod 0600 "${archive}" || die "не удалось защитить файл горячего бэкапа ${archive}"
     archive_mode="$(stat -c '%a' -- "${archive}" 2>/dev/null || true)"
@@ -3091,6 +3237,7 @@ make_hot_backup() {
     printf 'Горячая резервная копия создана: %s\n' "${archive}"
     printf 'Файл дампа в архиве: %s\n' "${dump_name}"
     printf 'Метаданные в архиве: backup-info.env\n'
+    [[ ! -f "${optimize_file}" ]] || printf 'Настройки кластера в архиве: optimize-claster.conf\n'
     printf 'Роли в метаданных: %s\n' "${#BACKUP_ROLE_NAMES[@]}"
 }
 
@@ -3419,7 +3566,8 @@ delete_menu() {
 restore_hot_backup() {
     local archive="$1" filename source_version source_database timestamp dump_name
     local row version name port status owner data log home socket_dir target_database stage metadata_file=""
-    local create_target_database=no target_database_owner=""
+    local create_target_database=no target_database_owner="" optimize_backup=""
+    local -a hot_extract_entries=()
     filename="${archive##*/}"
     if [[ "${filename}" =~ ^([0-9]+)-([A-Za-z0-9_][A-Za-z0-9_.-]*)-([0-9]{8})-([0-9]{6})-dmp\.tar\.gz$ ]]; then
         source_version="${BASH_REMATCH[1]}"
@@ -3503,15 +3651,20 @@ restore_hot_backup() {
     validate_hot_backup_archive_contents "${archive}" "${dump_name}"
     CLEANUP_DIR="$(mktemp -d /tmp/create-claster.hot-restore.XXXXXX)"
     stage="${CLEANUP_DIR}"
+    hot_extract_entries=("${dump_name}")
     if tar -tzf "${archive}" | grep -Fxq 'backup-info.env'; then
-        tar -xzf "${archive}" -C "${stage}" -- "${dump_name}" backup-info.env || die \
-            "не удалось извлечь горячий дамп и его метаданные"
+        hot_extract_entries+=(backup-info.env)
+    fi
+    if tar -tzf "${archive}" | grep -Fxq 'optimize-claster.conf'; then
+        hot_extract_entries+=(optimize-claster.conf)
+        optimize_backup="${stage}/optimize-claster.conf"
+    fi
+    tar -xzf "${archive}" -C "${stage}" -- "${hot_extract_entries[@]}" || die \
+        "не удалось извлечь содержимое горячего бэкапа"
+    if [[ -f "${stage}/backup-info.env" ]]; then
         [[ -f "${stage}/backup-info.env" && ! -L "${stage}/backup-info.env" ]] || die \
             "извлечённый метафайл не является обычным файлом"
         metadata_file="${stage}/backup-info.env"
-    else
-        tar -xzf "${archive}" -C "${stage}" -- "${dump_name}" || die \
-            "не удалось извлечь горячий дамп"
     fi
     [[ -f "${stage}/${dump_name}" && ! -L "${stage}/${dump_name}" ]] || die \
         "извлечённый дамп не является обычным файлом"
@@ -3534,6 +3687,11 @@ restore_hot_backup() {
         --host="${socket_dir}" --port="${port}" --dbname="${target_database}" \
         "${stage}/${dump_name}" || die \
         "не удалось восстановить горячий бэкап в базу ${target_database}"
+    if [[ -n "${optimize_backup}" ]]; then
+        offer_hot_backup_optimize_restore "${version}" "${name}" "${optimize_backup}"
+    else
+        printf 'В горячем бэкапе нет optimize-claster.conf; настройки кластера не изменены.\n'
+    fi
     rm -rf -- "${stage}"
     CLEANUP_DIR=""
     printf 'Горячий бэкап восстановлен в %s/%s, база %s.\n' \

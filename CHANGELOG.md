@@ -4,6 +4,28 @@ All significant project changes are recorded in this file.
 
 [Русский оригинал](CHANGELOG_ru.md). This is a technical translation of the Russian changelog. Entries describe the respective historical releases, not necessarily current behavior. Historical artifact names and test results are retained; some referenced reports are no longer present in the current tree.
 
+## 2.6.4 — 2026-10-13
+
+- Patch release for selecting the renamed cluster's data placement and carrying
+  generated tuning through hot backup and restore.
+- Interactive cluster rename now asks for data placement and defaults to the
+  current parent directory, keeping the normal same-filesystem operation a fast
+  directory rename while still allowing selection of another data root. The
+  internal checked rename path continues to support an unchanged fixed custom
+  data directory for controlled recovery and regression workflows.
+- Hot backups include the source cluster's `optimize-claster.conf` when present.
+  Interactive hot restore compares the current and archived files side by side
+  and replaces the target only after a separate `y/Y` confirmation. New
+  `--restore-optimize yes|no` and `PGCC_RESTORE_OPTIMIZE=yes|no` interfaces
+  provide a prompt-free choice; automated restore defaults to preserving the
+  target cluster tuning.
+- A destructive eight-way WSL run completed successfully after correcting the
+  live UI input sequence and allowing a controlled checked rename to retain its
+  existing fixed custom data path. All eight final chains, cleanup audits,
+  rename and hot-optimize contracts passed: 3,840 PASS rows plus 120 successful
+  return-code comparisons. The passed journal fully confirms 27 of 61 plan IDs
+  and explicitly lists the untested variants for the other 34.
+
 ## 2.6.3 — 2026-10-07
 
 - Patch release for archive-size visibility in the interactive Restore picker.

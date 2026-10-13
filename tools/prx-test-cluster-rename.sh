@@ -67,12 +67,14 @@ pg_renamecluster() {
     [[ "${PG_CLUSTER_CONF_ROOT:-}" == "$fixture/etc/postgresql" ]] || return 1
     [[ "${failure:-}" != native ]] || return 1
     # Native pg_renamecluster updates paths before returning, unlike the old mock.
-    local f
+    local f old_data native_new_data
+    old_data="$(setting "$fixture/etc/postgresql/$1/$2/postgresql.conf" data_directory)"
+    native_new_data="$(renamed_cluster_path "${old_data}" "$2" "$3")"
     for f in "$fixture/etc/postgresql/$1/$2/"*.conf; do
         OLD="$2" NEW="$3" perl -pi -e 's/\b\Q$ENV{OLD}\E\b/$ENV{NEW}/g' "$f"
     done
     mv -- "$fixture/etc/postgresql/$1/$2" "$fixture/etc/postgresql/$1/$3"
-    mv -- "$fixture/data/$2" "$fixture/data/$3"
+    [[ "${old_data}" == "${native_new_data}" ]] || mv -- "${old_data}" "${native_new_data}"
 }
 mkdir -p "$fixture/etc/postgresql/18/old/conf.d" "$fixture/data/old" "$fixture/var/tmp" "$fixture/usr/lib/systemd/system" "$fixture/home/bin"
 touch "$fixture/home/bin/pg_ctl" "$fixture/home/bin/postgres"
@@ -118,6 +120,16 @@ printf down >"$fixture/state"
 rename_cluster_checked 18 old_new old "$fixture/data/old_new" online
 [[ "$(cluster_power_state 18 old)" == down ]]
 ! grep -q '^start ' "$fixture/events"
+mkdir -p "$fixture/relocated/pg_18"
+: >"$fixture/events"
+rename_cluster_checked 18 old old_relocated "$fixture/data/old" down \
+    "$fixture/relocated/pg_18/old_relocated"
+[[ "$(setting "$fixture/etc/postgresql/18/old_relocated/postgresql.conf" data_directory)" == \
+    "$fixture/relocated/pg_18/old_relocated" ]]
+[[ -f "$fixture/relocated/pg_18/old_relocated/PG_VERSION" && ! -e "$fixture/data/old_relocated" ]]
+rename_cluster_checked 18 old_relocated old "$fixture/relocated/pg_18/old_relocated" down \
+    "$fixture/data/old"
+[[ -f "$fixture/data/old/PG_VERSION" && ! -e "$fixture/relocated/pg_18/old" ]]
 for failure in stop status native config reload start; do
     case_fixture="$fixture/case-$failure"
     mkdir "$case_fixture"
@@ -135,4 +147,4 @@ for failure in stop status native config reload start; do
 done
 unset failure
 bash -n "$repo/create-claster.sh"
-printf 'PASS: native-like prefix/reverse rename, idempotency, online/down, autostart, bounded reload and six safe-failure paths\n'
+printf 'PASS: native-like prefix/reverse/relocated rename, idempotency, online/down, autostart, bounded reload and six safe-failure paths\n'
